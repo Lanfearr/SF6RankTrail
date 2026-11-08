@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Match, RatingKind, RatingPoint } from '@shared/types'
+import { CharacterIcon } from '../components/CharacterIcon'
 import { TrendChart } from '../components/TrendChart'
 import { useAppStore } from '../store/useAppStore'
 
@@ -14,15 +15,18 @@ export function ProView() {
   const lastEvent = useAppStore((state) => state.lastEvent)
   const refresh = useAppStore((state) => state.refresh)
   const addPlayer = useAppStore((state) => state.addPlayer)
+  const removePlayer = useAppStore((state) => state.removePlayer)
+  const refreshSession = useAppStore((state) => state.refreshSession)
   const login = useAppStore((state) => state.login)
   const start = useAppStore((state) => state.start)
   const stop = useAppStore((state) => state.stop)
 
   const [kind, setKind] = useState<RatingKind>('MR')
-  const [character, setCharacter] = useState('all')
+  const [character, setCharacter] = useState<string | null>(null)
   const [points, setPoints] = useState<RatingPoint[]>([])
   const [matches, setMatches] = useState<Match[]>([])
   const [cfn, setCfn] = useState('')
+  const [nickname, setNickname] = useState('')
   const [intervalMs, setIntervalMs] = useState('20000')
   const [opacity, setOpacity] = useState(1)
   const [busy, setBusy] = useState(false)
@@ -66,8 +70,8 @@ export function ProView() {
   }, [])
 
   useEffect(() => {
-    setCharacter('all')
-  }, [shortId, kind])
+    setCharacter(null)
+  }, [shortId])
 
   const characters = useMemo(
     () => [
@@ -78,9 +82,20 @@ export function ProView() {
     [points]
   )
 
+  const recentCharacter =
+    matches[0]?.myChar ?? points[points.length - 1]?.character ?? null
+  const selectedCharacter = character ?? recentCharacter ?? 'all'
+  const effectiveCharacter =
+    selectedCharacter === 'all' || characters.includes(selectedCharacter)
+      ? selectedCharacter
+      : 'all'
+
   const filtered = useMemo(
-    () => (character === 'all' ? points : points.filter((point) => point.character === character)),
-    [points, character]
+    () =>
+      effectiveCharacter === 'all'
+        ? points
+        : points.filter((point) => point.character === effectiveCharacter),
+    [points, effectiveCharacter]
   )
 
   const stats = useMemo(() => {
@@ -92,6 +107,37 @@ export function ProView() {
       count: filtered.length
     }
   }, [filtered])
+
+  const ratingDeltas = useMemo(() => {
+    const groups = new Map<string, RatingPoint[]>()
+    for (const point of points) {
+      const key = point.character ?? ''
+      const group = groups.get(key)
+      if (group) group.push(point)
+      else groups.set(key, [point])
+    }
+
+    const deltas = new Map<number, number>()
+    for (const group of groups.values()) {
+      group.sort((a, b) => a.observedAt - b.observedAt || a.id - b.id)
+      for (let index = 1; index < group.length; index += 1) {
+        const previous = group[index - 1]
+        const next = group[index]
+        if (!previous || !next || next.observedAt <= previous.observedAt) continue
+        deltas.set(previous.observedAt, next.value - previous.value)
+      }
+    }
+    return deltas
+  }, [points])
+
+  const session = dashboard?.session ?? null
+  const sessionDelta = session ? (kind === 'LP' ? session.lpDelta : session.ratingDelta) : null
+  const sessionDeltaClass =
+    sessionDelta === null ? '' : sessionDelta > 0 ? 'up' : sessionDelta < 0 ? 'down' : ''
+  const sessionDeltaText =
+    sessionDelta === null
+      ? '—'
+      : `${sessionDelta > 0 ? '+' : ''}${sessionDelta.toLocaleString()}`
 
   const run = async (action: () => Promise<unknown>): Promise<void> => {
     setBusy(true)
@@ -117,8 +163,9 @@ export function ProView() {
   const submitPlayer = async (): Promise<void> => {
     const value = cfn.trim()
     if (!value) return
-    await addPlayer(value)
+    await addPlayer(value, nickname.trim() || undefined)
     setCfn('')
+    setNickname('')
   }
 
   return (
@@ -134,21 +181,43 @@ export function ProView() {
 
       <aside className="sidebar">
         <div className="section-title">账号</div>
-        <ul className="player-list">
-          {players.length === 0 && <li className="muted">暂无账号</li>}
-          {players.map((player) => (
-            <li
-              key={player.shortId}
-              className={player.shortId === dashboard?.player.shortId ? 'active' : ''}
-              onClick={() => setActive(player.shortId)}
-            >
-              <span>{player.displayName ?? player.cfn ?? player.shortId}</span>
-              <span className="muted">{player.shortId}</span>
-            </li>
-          ))}
-        </ul>
+        <div className="player-tags">
+          {players.length === 0 && <span className="muted">暂无账号</span>}
+          {players.map((player) => {
+            const accountName =
+              player.displayName ??
+              (player.cfn && player.cfn !== player.shortId ? player.cfn : null)
+            const label = accountName ?? player.shortId
+            return (
+              <div
+                key={player.shortId}
+                className={
+                  player.shortId === dashboard?.player.shortId ? 'player-tag active' : 'player-tag'
+                }
+                title={player.shortId}
+                onClick={() => setActive(player.shortId)}
+              >
+                <button
+                  type="button"
+                  className="tag-remove"
+                  title="删除账号"
+                  aria-label={`删除 ${label}`}
+                  disabled={busy}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void run(() => removePlayer(player.shortId))
+                  }}
+                >
+                  ×
+                </button>
+                <span className="tag-name">{label}</span>
+                {accountName && <span className="tag-id">{player.shortId}</span>}
+              </div>
+            )
+          })}
+        </div>
 
-        <div className="row">
+        <div className="add-player">
           <input
             className="input"
             placeholder="CFN 或 short_id"
@@ -158,9 +227,20 @@ export function ProView() {
               if (event.key === 'Enter') void submitPlayer()
             }}
           />
-          <button className="chip" onClick={() => void submitPlayer()} disabled={busy}>
-            添加
-          </button>
+          <div className="row">
+            <input
+              className="input"
+              placeholder="昵称（可选）"
+              value={nickname}
+              onChange={(event) => setNickname(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void submitPlayer()
+              }}
+            />
+            <button className="chip" onClick={() => void submitPlayer()} disabled={busy}>
+              添加
+            </button>
+          </div>
         </div>
 
         <div className="section-title">同步</div>
@@ -210,6 +290,26 @@ export function ProView() {
       </aside>
 
       <main className="main-panel">
+        <div className="session-hero">
+          <div>
+            <div className="session-label">本次会话净上分</div>
+            <div className={`session-gain ${sessionDeltaClass}`}>
+              {sessionDeltaText}
+              <span className="session-kind">{kind}</span>
+            </div>
+            <div className="muted">
+              {session ? `${session.matches} 场 · ${session.wins}W ${session.losses}L` : '尚未开始'}
+            </div>
+          </div>
+          <button
+            className="chip"
+            disabled={!shortId || busy}
+            onClick={() => shortId && void run(() => refreshSession(shortId))}
+          >
+            刷新
+          </button>
+        </div>
+
         <div className="toolbar">
           <div className="pills">
             {(['MR', 'LP'] as const).map((value) => (
@@ -224,7 +324,7 @@ export function ProView() {
           </div>
           <select
             className="select"
-            value={character}
+            value={effectiveCharacter}
             onChange={(event) => setCharacter(event.target.value)}
           >
             <option value="all">全部角色</option>
@@ -241,7 +341,12 @@ export function ProView() {
           </div>
         </div>
 
-        <TrendChart points={filtered} kind={kind} />
+        <TrendChart
+          points={filtered}
+          kind={kind}
+          matches={matches}
+          deltas={ratingDeltas}
+        />
 
         <div className="match-list">
           <div className="section-title">最近对局</div>
@@ -249,6 +354,11 @@ export function ProView() {
             {matches.length === 0 && <li className="muted">暂无对局</li>}
             {matches.slice(0, 40).map((match) => (
               <li key={match.replayId}>
+                <CharacterIcon
+                  name={match.oppChar}
+                  result={match.result}
+                  delta={ratingDeltas.get(match.playedAt) ?? null}
+                />
                 <span className={`result ${match.result}`}>
                   {match.result === 'win' ? '胜' : match.result === 'loss' ? '负' : '平'}
                 </span>

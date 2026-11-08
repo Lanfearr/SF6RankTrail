@@ -5,6 +5,7 @@ import type {
   Player,
   PlayerDashboard,
   ServerEvent,
+  SessionSummary,
   SyncStartResult,
   SyncStatus
 } from '@shared/types'
@@ -17,7 +18,9 @@ interface AppStore {
   lastEvent: string
   warning: string | null
   refresh: () => Promise<void>
-  addPlayer: (value: string) => Promise<Player | null>
+  addPlayer: (value: string, displayName?: string) => Promise<Player | null>
+  removePlayer: (shortId: string) => Promise<boolean>
+  refreshSession: (shortId: string) => Promise<SessionSummary | null>
   login: () => Promise<LoginResult>
   start: () => Promise<SyncStartResult>
   stop: () => Promise<void>
@@ -69,10 +72,24 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }))
   },
 
-  addPlayer: async (value) => {
-    const player = await window.api.addPlayer({ cfn: value })
+  addPlayer: async (value, displayName) => {
+    const player = await window.api.addPlayer({ cfn: value, displayName })
     await get().refresh()
     return player
+  },
+
+  removePlayer: async (shortId) => {
+    const removed = await window.api.removePlayer(shortId)
+    set({ warning: null })
+    await get().refresh()
+    return removed
+  },
+
+  refreshSession: async (shortId) => {
+    const session = await window.api.refreshSession(shortId)
+    await get().refresh()
+    set({ lastEvent: '已开始新的本次会话' })
+    return session
   },
 
   login: async () => {
@@ -156,8 +173,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       }
       case 'match:new': {
         const match = event.payload
-        const label =
-          match.result === 'win' ? '胜' : match.result === 'loss' ? '负' : '平'
+        const label = match.result === 'win' ? '胜' : match.result === 'loss' ? '负' : '平'
         set({ lastEvent: `新对局 ${label} · ${match.myChar ?? '?'}` })
       }
     }

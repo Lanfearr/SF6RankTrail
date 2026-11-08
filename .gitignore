@@ -5,9 +5,43 @@ dist/
 *.db
 *.db-shm
 *.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
 storage.json
 session.json
 chrome-profile/
 .DS_Store
+Thumbs.db
+Desktop.ini
 spike/out/
 .env
+.env.*
+!.env.example
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*~
+*.code-workspace
+
+# TypeScript / 测试缓存
+*.tsbuildinfo
+.eslintcache
+coverage/
+test-results/
+playwright-report/
+*.timestamp-*.mjs
+.cache/
+
+# 临时文件
+*.tmp
+*.pid
+*.bak
+
+# 本地证书/密钥
+*.pem
+*.key
+*.p12
+*.pfx

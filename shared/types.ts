@@ -49,6 +49,12 @@ export interface SessionSummary {
   lpDelta: number | null
 }
 
+export interface CurrentRating {
+  character: string | null
+  mr: number | null
+  lp: number | null
+}
+
 export interface RatingSnapshot {
   kind: RatingKind
   value: number
@@ -110,6 +116,7 @@ export interface SyncStartResult {
 export interface PlayerInput {
   cfn?: string
   shortId?: string
+  displayName?: string
 }
 
 export interface MatchQuery {
@@ -130,9 +137,11 @@ export interface IpcApi {
   authStatus: () => Promise<{ loggedIn: boolean; shortId?: string }>
   listPlayers: () => Promise<Player[]>
   addPlayer: (input: PlayerInput) => Promise<Player | null>
+  removePlayer: (shortId: string) => Promise<boolean>
   listMatches: (query: MatchQuery) => Promise<Match[]>
   ratingSeries: (query: RatingQuery) => Promise<RatingPoint[]>
   dashboardList: () => Promise<PlayerDashboard[]>
+  refreshSession: (shortId: string) => Promise<SessionSummary | null>
   syncStart: () => Promise<SyncStartResult>
   syncStop: () => Promise<void>
   syncStatus: () => Promise<SyncStatus>

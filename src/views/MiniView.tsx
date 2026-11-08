@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { RatingKind } from '@shared/types'
 import { AnimatedNumber } from '../components/AnimatedNumber'
 import { useAppStore } from '../store/useAppStore'
 
@@ -9,30 +10,34 @@ export function MiniView() {
   const setActive = useAppStore((state) => state.setActive)
   const sync = useAppStore((state) => state.sync)
   const lastEvent = useAppStore((state) => state.lastEvent)
+  const refreshSession = useAppStore((state) => state.refreshSession)
   const login = useAppStore((state) => state.login)
   const start = useAppStore((state) => state.start)
   const stop = useAppStore((state) => state.stop)
 
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [kind, setKind] = useState<RatingKind | null>(null)
 
   const dashboard = useMemo(
     () =>
-      dashboards.find((entry) => entry.player.shortId === activeShortId) ??
-      dashboards[0] ??
-      null,
+      dashboards.find((entry) => entry.player.shortId === activeShortId) ?? dashboards[0] ?? null,
     [dashboards, activeShortId]
   )
 
-  const latest = dashboard?.latestMr ?? dashboard?.latestLp ?? null
-  const kind = latest?.kind ?? null
+  const activeKind: RatingKind = kind ?? (dashboard?.latestMr ? 'MR' : dashboard?.latestLp ? 'LP' : 'MR')
+  const latest = activeKind === 'MR' ? dashboard?.latestMr : dashboard?.latestLp
   const session = dashboard?.session ?? null
-  const delta = session ? (kind === 'LP' ? session.lpDelta : session.ratingDelta) : null
+  const delta = session ? (activeKind === 'LP' ? session.lpDelta : session.ratingDelta) : null
   const winRate =
-    session && session.matches > 0
-      ? Math.round((session.wins / session.matches) * 100)
-      : null
+    session && session.matches > 0 ? Math.round((session.wins / session.matches) * 100) : null
   const running = sync.state === 'syncing'
+
+  useEffect(() => {
+    void window.api.getSetting('miniKind').then((value) => {
+      if (value === 'MR' || value === 'LP') setKind(value)
+    })
+  }, [])
 
   const run = async (action: () => Promise<unknown>, label: string): Promise<void> => {
     setBusy(true)
@@ -44,12 +49,14 @@ export function MiniView() {
     }
   }
 
+  const chooseKind = (next: RatingKind): void => {
+    setKind(next)
+    void window.api.setSetting('miniKind', next)
+  }
+
   const deltaClass =
     delta === null ? 'delta' : delta > 0 ? 'delta up' : delta < 0 ? 'delta down' : 'delta'
-  const deltaLabel =
-    delta === null || !kind
-      ? '本会话 —'
-      : `本会话 ${delta >= 0 ? '+' : ''}${delta} ${kind}`
+  const deltaLabel = delta === null ? '本会话 —' : `本会话 ${delta >= 0 ? '+' : ''}${delta} ${activeKind}`
 
   return (
     <div className="mini">
@@ -61,7 +68,7 @@ export function MiniView() {
               className={player.shortId === dashboard?.player.shortId ? 'pill active' : 'pill'}
               onClick={() => setActive(player.shortId)}
             >
-              {player.cfn ?? player.shortId}
+              {player.displayName ?? player.cfn ?? player.shortId}
             </button>
           ))}
         </div>
@@ -81,7 +88,17 @@ export function MiniView() {
       ) : (
         <>
           <div className="rating-card">
-            <div className="rating-kind">{kind ?? '—'}</div>
+            <div className="rating-tabs">
+              {(['MR', 'LP'] as const).map((value) => (
+                <button
+                  key={value}
+                  className={activeKind === value ? 'pill active' : 'pill'}
+                  onClick={() => chooseKind(value)}
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
             <AnimatedNumber className="rating-value" value={latest?.value ?? null} />
             <div className={deltaClass}>{deltaLabel}</div>
           </div>
@@ -115,6 +132,19 @@ export function MiniView() {
             onClick={() => void run(login, '正在打开登录窗口…')}
           >
             登录
+          </button>
+          <button
+            className="chip"
+            disabled={busy || !dashboard}
+            onClick={() =>
+              dashboard &&
+              void run(
+                () => refreshSession(dashboard.player.shortId),
+                '正在开始新的本次会话…'
+              )
+            }
+          >
+            刷新
           </button>
           <button
             className="chip active"

@@ -166,11 +166,26 @@ function registerIpc(): void {
   ipcMain.handle('players:add', async (_event, input: PlayerInput) => {
     const shortId = input.shortId ?? input.cfn
     if (!shortId) return null
-    const player = repo.upsertPlayer({ shortId, cfn: input.cfn })
+    const player = repo.upsertPlayer({
+      shortId,
+      cfn: input.cfn,
+      displayName: input.displayName
+    })
     if (syncService?.isRunning() && hasSavedSession(sessionPath)) {
       startSync()
     }
     return player
+  })
+
+  ipcMain.handle('players:remove', async (_event, shortId: string) => {
+    const removed = repo.deletePlayer(shortId)
+    if (repo.listPlayers().length === 0) {
+      await stopSync()
+      setStatus({ state: 'idle', at: Date.now(), message: '没有追踪账号' })
+    } else if (syncService?.isRunning() && hasSavedSession(sessionPath)) {
+      startSync()
+    }
+    return removed
   })
 
   ipcMain.handle('matches:list', async (_event, query: MatchQuery) => repo.listMatches(query))
@@ -178,6 +193,16 @@ function registerIpc(): void {
   ipcMain.handle('ratings:series', async (_event, query: RatingQuery) => repo.listRatings(query))
 
   ipcMain.handle('dashboard:list', async () => repo.listDashboards())
+
+  ipcMain.handle('session:refresh', async (_event, shortId: string) => {
+    if (!repo.listPlayers().some((player) => player.shortId === shortId)) return null
+    const session = repo.startSession(shortId)
+    hub.broadcast({ type: 'session:update', payload: session })
+    if (syncService?.isRunning() && hasSavedSession(sessionPath)) {
+      startSync()
+    }
+    return session
+  })
 
   ipcMain.handle('sync:start', async (): Promise<SyncStartResult> => startSync())
 

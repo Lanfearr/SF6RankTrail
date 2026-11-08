@@ -1,4 +1,5 @@
 import type {
+  CurrentRating,
   Match,
   MatchQuery,
   Player,
@@ -60,6 +61,14 @@ interface MatchTimeRow {
   played_at: number
   my_mr: number | null
   my_lp: number | null
+}
+
+interface SessionMarkRow {
+  short_id: string
+  started_at: number
+  start_mr: number | null
+  start_lp: number | null
+  updated_at: number
 }
 
 interface SessionStatsRow {
@@ -153,6 +162,35 @@ export class Repository {
     this.db.prepare('UPDATE players SET last_synced = ? WHERE short_id = ?').run(at, shortId)
   }
 
+  setDisplayNameIfEmpty(shortId: string, displayName: string): boolean {
+    const info = this.db
+      .prepare(
+        `UPDATE players SET display_name = ?
+         WHERE short_id = ? AND (display_name IS NULL OR display_name = '')`
+      )
+      .run(displayName, shortId) as unknown as RunResult
+    return Number(info.changes) > 0
+  }
+
+  deletePlayer(shortId: string): boolean {
+    this.db.exec('BEGIN')
+    try {
+      this.db.prepare('DELETE FROM rating_points WHERE short_id = ?').run(shortId)
+      this.db.prepare('DELETE FROM sessions WHERE short_id = ?').run(shortId)
+      this.db.prepare('DELETE FROM session_marks WHERE short_id = ?').run(shortId)
+      this.db.prepare('DELETE FROM matches WHERE short_id = ?').run(shortId)
+      this.db.prepare('DELETE FROM settings WHERE key = ?').run(`backfill:${shortId}`)
+      const info = this.db
+        .prepare('DELETE FROM players WHERE short_id = ?')
+        .run(shortId) as unknown as RunResult
+      this.db.exec('COMMIT')
+      return Number(info.changes) > 0
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
   insertMatch(match: Match): boolean {
     const info = this.db
       .prepare(
@@ -236,6 +274,76 @@ export class Repository {
     return rows.map(toRating)
   }
 
+  recordCurrentRatings(
+    shortId: string,
+    ratings: CurrentRating[],
+    at = Date.now()
+  ): RatingPoint[] {
+    const preferredCharacter = this.getLatestMatchCharacter(shortId)
+    const entries: Array<{ character: string; kind: RatingPoint['kind']; value: number }> = []
+
+    for (const rating of ratings) {
+      const character = rating.character
+      if (!character) continue
+      if (rating.mr !== null && rating.mr > 0) {
+        entries.push({ character, kind: 'MR', value: rating.mr })
+      }
+      if (rating.lp !== null && rating.lp > 0) {
+        entries.push({ character, kind: 'LP', value: rating.lp })
+      }
+    }
+
+    entries.sort(
+      (a, b) =>
+        Number(a.character === preferredCharacter) - Number(b.character === preferredCharacter)
+    )
+
+    const inserted: RatingPoint[] = []
+    for (const entry of entries) {
+      const latestMatchAt = this.getLatestMatchTime(shortId, entry.character)
+      const last = this.getLatestRating(shortId, entry.kind, entry.character)
+      const hasSnapshotAfterLatest =
+        last !== null && latestMatchAt !== null && last.observedAt > latestMatchAt
+      if (last?.value === entry.value && (latestMatchAt === null || hasSnapshotAfterLatest)) {
+        continue
+      }
+      inserted.push(
+        this.insertRating({
+          shortId,
+          character: entry.character,
+          kind: entry.kind,
+          value: entry.value,
+          source: 'snapshot',
+          estimated: false,
+          observedAt: Math.max(at, (latestMatchAt ?? 0) + 1)
+        })
+      )
+    }
+    return inserted
+  }
+
+  getLatestMatchCharacter(shortId: string): string | null {
+    const row = this.db
+      .prepare(
+        `SELECT my_char FROM matches
+         WHERE short_id = ? AND my_char IS NOT NULL
+         ORDER BY played_at DESC
+         LIMIT 1`
+      )
+      .get(shortId) as { my_char: string } | undefined
+    return row?.my_char ?? null
+  }
+
+  private getLatestMatchTime(shortId: string, character: string): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT MAX(played_at) AS played_at FROM matches
+         WHERE short_id = ? AND my_char = ?`
+      )
+      .get(shortId, character) as { played_at: number | null } | undefined
+    return row?.played_at ?? null
+  }
+
   rebuildSessions(shortId: string): void {
     const rows = this.db
       .prepare(
@@ -312,7 +420,89 @@ export class Repository {
     const row = this.db
       .prepare('SELECT * FROM sessions WHERE short_id = ? ORDER BY started_at DESC LIMIT 1')
       .get(shortId) as SessionRow | undefined
-    return row ? this.toSessionSummary(row) : null
+    if (!row) return null
+
+    const session = this.toSessionSummary(row)
+    const character = this.getLatestMatchCharacter(shortId)
+    if (!character || row.ended_at === null) return session
+
+    const latestMr = this.getLatestRating(shortId, 'MR', character)
+    const latestLp = this.getLatestRating(shortId, 'LP', character)
+    const currentMr = latestMr && latestMr.observedAt > row.ended_at ? latestMr : null
+    const currentLp = latestLp && latestLp.observedAt > row.ended_at ? latestLp : null
+
+    return {
+      ...session,
+      ratingDelta:
+        row.start_rating !== null && currentMr !== null
+          ? currentMr.value - row.start_rating
+          : session.ratingDelta,
+      lpDelta:
+        row.start_lp !== null && currentLp !== null
+          ? currentLp.value - row.start_lp
+          : session.lpDelta
+    }
+  }
+
+  startSession(shortId: string, at = Date.now()): SessionSummary {
+    const character = this.getLatestMatchCharacter(shortId)
+    const mr = this.getLatestRating(shortId, 'MR', character) ?? this.getLatestRating(shortId, 'MR')
+    const lp = this.getLatestRating(shortId, 'LP', character) ?? this.getLatestRating(shortId, 'LP')
+    this.db
+      .prepare(
+        `INSERT INTO session_marks (short_id, started_at, start_mr, start_lp, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(short_id) DO UPDATE SET
+           started_at = excluded.started_at,
+           start_mr = excluded.start_mr,
+           start_lp = excluded.start_lp,
+           updated_at = excluded.updated_at`
+      )
+      .run(shortId, at, mr?.value ?? null, lp?.value ?? null, Date.now())
+
+    const session = this.getManualSession(shortId)
+    if (!session) throw new Error(`session not found after start: ${shortId}`)
+    return session
+  }
+
+  getActiveSession(shortId: string): SessionSummary | null {
+    return this.getManualSession(shortId) ?? this.getLatestSession(shortId)
+  }
+
+  getManualSession(shortId: string): SessionSummary | null {
+    const mark = this.db
+      .prepare('SELECT * FROM session_marks WHERE short_id = ?')
+      .get(shortId) as SessionMarkRow | undefined
+    if (!mark) return null
+
+    const stats = this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS matches,
+           COALESCE(SUM(result = 'win'), 0) AS wins,
+           COALESCE(SUM(result = 'loss'), 0) AS losses
+         FROM matches
+         WHERE short_id = ? AND played_at >= ?`
+      )
+      .get(shortId, mark.started_at) as SessionStatsRow | undefined
+
+    const character = this.getLatestMatchCharacter(shortId)
+    const latestMr =
+      this.getLatestRating(shortId, 'MR', character) ?? this.getLatestRating(shortId, 'MR')
+    const latestLp =
+      this.getLatestRating(shortId, 'LP', character) ?? this.getLatestRating(shortId, 'LP')
+
+    return {
+      shortId,
+      startedAt: mark.started_at,
+      endedAt: null,
+      matches: Number(stats?.matches ?? 0),
+      wins: Number(stats?.wins ?? 0),
+      losses: Number(stats?.losses ?? 0),
+      ratingDelta:
+        mark.start_mr !== null && latestMr !== null ? latestMr.value - mark.start_mr : null,
+      lpDelta: mark.start_lp !== null && latestLp !== null ? latestLp.value - mark.start_lp : null
+    }
   }
 
   private toSessionSummary(row: SessionRow): SessionSummary {
@@ -346,15 +536,28 @@ export class Repository {
     }
   }
 
-  getLatestRating(shortId: string, kind: RatingPoint['kind']): RatingPoint | null {
-    const row = this.db
-      .prepare(
-        `SELECT * FROM rating_points
-         WHERE short_id = ? AND kind = ?
-         ORDER BY observed_at DESC, id DESC
-         LIMIT 1`
-      )
-      .get(shortId, kind) as RatingRow | undefined
+  getLatestRating(
+    shortId: string,
+    kind: RatingPoint['kind'],
+    character?: string | null
+  ): RatingPoint | null {
+    const row = character
+      ? (this.db
+          .prepare(
+            `SELECT * FROM rating_points
+             WHERE short_id = ? AND kind = ? AND character = ?
+             ORDER BY observed_at DESC, id DESC
+             LIMIT 1`
+          )
+          .get(shortId, kind, character) as RatingRow | undefined)
+      : (this.db
+          .prepare(
+            `SELECT * FROM rating_points
+             WHERE short_id = ? AND kind = ?
+             ORDER BY observed_at DESC, id DESC
+             LIMIT 1`
+          )
+          .get(shortId, kind) as RatingRow | undefined)
     return row ? toRating(row) : null
   }
 
@@ -373,11 +576,16 @@ export class Repository {
           }
         : null
 
+    const character = this.getLatestMatchCharacter(shortId)
     return {
       player: toPlayer(player),
-      latestMr: toSnapshot(this.getLatestRating(shortId, 'MR')),
-      latestLp: toSnapshot(this.getLatestRating(shortId, 'LP')),
-      session: this.getLatestSession(shortId)
+      latestMr: toSnapshot(
+        this.getLatestRating(shortId, 'MR', character) ?? this.getLatestRating(shortId, 'MR')
+      ),
+      latestLp: toSnapshot(
+        this.getLatestRating(shortId, 'LP', character) ?? this.getLatestRating(shortId, 'LP')
+      ),
+      session: this.getActiveSession(shortId)
     }
   }
 

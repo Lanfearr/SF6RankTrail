@@ -1,22 +1,72 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
-import { DataZoomComponent, GridComponent, TooltipComponent } from 'echarts/components'
+import {
+  DataZoomComponent,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent
+} from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import type { RatingPoint } from '@shared/types'
+import type { Match, MatchResult, RatingPoint } from '@shared/types'
+import { characterIconSrc } from '../lib/characterIcons'
+import { formatDelta } from '../lib/format'
 
-echarts.use([LineChart, GridComponent, TooltipComponent, DataZoomComponent, CanvasRenderer])
+echarts.use([
+  LineChart,
+  GridComponent,
+  TooltipComponent,
+  DataZoomComponent,
+  LegendComponent,
+  CanvasRenderer
+])
 
 type ChartOption = Parameters<ReturnType<typeof echarts.init>['setOption']>[0]
 
 interface Props {
   points: RatingPoint[]
   kind: 'MR' | 'LP'
+  matches: Match[]
+  deltas: ReadonlyMap<number, number>
 }
 
-export function TrendChart({ points, kind }: Props) {
+interface ChartIcon {
+  key: string
+  left: number
+  top: number
+  size: number
+  src: string
+  label: string
+  result: MatchResult
+  delta: number | null
+}
+
+interface TooltipParam {
+  dataIndex?: number
+  value?: unknown
+}
+
+interface ZoomModel {
+  getPercentRange?: () => number[]
+}
+
+const GRID_LEFT = 56
+const GRID_RIGHT = 20
+const GRID_BOTTOM = 72
+const ICON_SPACING = 24
+
+const resultLabel = (result: MatchResult): string =>
+  result === 'win' ? '胜' : result === 'loss' ? '负' : '平'
+
+const seriesKey = (character: string | null, observedAt: number): string =>
+  `${character ?? ''}\u0000${observedAt}`
+
+export function TrendChart({ points, kind, matches, deltas }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null)
+  const iconsUpdateRef = useRef<() => void>(() => undefined)
+  const [chartIcons, setChartIcons] = useState<ChartIcon[]>([])
+  const seriesCount = new Set(points.map((point) => point.character ?? '未知角色')).size
 
   useEffect(() => {
     const container = containerRef.current
@@ -25,7 +75,10 @@ export function TrendChart({ points, kind }: Props) {
     const chart = echarts.init(container, 'dark', { renderer: 'canvas' })
     chartRef.current = chart
 
-    const observer = new ResizeObserver(() => chart.resize())
+    const observer = new ResizeObserver(() => {
+      chart.resize()
+      requestAnimationFrame(() => iconsUpdateRef.current())
+    })
     observer.observe(container)
 
     return () => {
@@ -39,7 +92,14 @@ export function TrendChart({ points, kind }: Props) {
     const chart = chartRef.current
     if (!chart) return
 
-    const data = points.map((point) => point.value)
+    const groups = new Map<string, number>()
+    for (const point of points) {
+      const name = point.character ?? '未知角色'
+      groups.set(name, (groups.get(name) ?? 0) + 1)
+    }
+    const multi = groups.size > 1
+    const gridTop = multi ? 48 : 28
+
     let previousDay = ''
     const labels = points.map((point) => {
       const date = new Date(point.observedAt)
@@ -48,20 +108,88 @@ export function TrendChart({ points, kind }: Props) {
       previousDay = day
       return `${date.getMonth() + 1}/${date.getDate()}`
     })
+
+    const matchesByTime = new Map<number, Match>()
+    const matchesBySeries = new Map<string, Match>()
+    for (const match of matches) {
+      matchesByTime.set(match.playedAt, match)
+      matchesBySeries.set(seriesKey(match.myChar, match.playedAt), match)
+    }
+
+    const pointsByCharacter = new Map<string, RatingPoint[]>()
+    for (const point of points) {
+      const key = point.character ?? ''
+      const group = pointsByCharacter.get(key)
+      if (group) group.push(point)
+      else pointsByCharacter.set(key, [point])
+    }
+
+    const previousMatchByPointId = new Map<number, Match>()
+    for (const group of pointsByCharacter.values()) {
+      group.sort((a, b) => a.observedAt - b.observedAt || a.id - b.id)
+      for (let index = 1; index < group.length; index += 1) {
+        const previous = group[index - 1]
+        const current = group[index]
+        if (!previous || !current) continue
+        const match = matchesBySeries.get(seriesKey(previous.character, previous.observedAt))
+        if (match) previousMatchByPointId.set(current.id, match)
+      }
+    }
+
+    const series = [...groups.keys()].map((name) => ({
+      name,
+      type: 'line' as const,
+      showSymbol: points.length <= 2,
+      smooth: true,
+      connectNulls: true,
+      data: points.map((point) => ((point.character ?? '未知角色') === name ? point.value : null)),
+      areaStyle: multi ? undefined : { opacity: 0.16 },
+      lineStyle: { width: multi ? 1.8 : 2, color: multi ? undefined : '#f59e0b' },
+      emphasis: { focus: 'series' as const }
+    }))
+
     const option: ChartOption = {
       backgroundColor: 'transparent',
-      grid: { left: 56, right: 20, top: 28, bottom: 72 },
+      color: [
+        '#f59e0b',
+        '#38bdf8',
+        '#a78bfa',
+        '#fb7185',
+        '#34d399',
+        '#facc15',
+        '#22d3ee',
+        '#f472b6',
+        '#a3e635',
+        '#fb923c'
+      ],
+      legend: multi
+        ? {
+            type: 'scroll',
+            top: 0,
+            left: 0,
+            right: 0,
+            itemWidth: 10,
+            itemHeight: 8,
+            textStyle: { fontSize: 10, color: '#9ca3af' }
+          }
+        : undefined,
+      grid: { left: GRID_LEFT, right: GRID_RIGHT, top: gridTop, bottom: GRID_BOTTOM },
       tooltip: {
         trigger: 'axis',
-        formatter: (params: { dataIndex: number } | { dataIndex: number }[]) => {
-          const first = Array.isArray(params) ? params[0] : params
+        formatter: (params: TooltipParam | TooltipParam[]) => {
+          const list = Array.isArray(params) ? params : [params]
+          const first =
+            list.find((item) => item.value !== null && item.value !== undefined) ?? list[0]
           const point = points[first?.dataIndex ?? -1]
           if (!point) return ''
-          return [
+          const match = matchesByTime.get(point.observedAt)
+          const lines = [
             `第 ${(first?.dataIndex ?? 0) + 1} 场`,
-            `${kind} ${point.value.toLocaleString()}`,
+            `${point.character ?? '未知角色'} ${kind} ${point.value.toLocaleString()}`,
             new Date(point.observedAt).toLocaleString()
-          ].join('<br/>')
+          ]
+          if (match) lines.splice(2, 0, `对手 ${match.oppChar ?? '?'} · ${resultLabel(match.result)}`)
+          return lines.join('<br/>')
         }
       },
       xAxis: {
@@ -83,21 +211,140 @@ export function TrendChart({ points, kind }: Props) {
         { type: 'inside' },
         { type: 'slider', height: 18, bottom: 14, borderColor: 'transparent' }
       ],
-      series: [
-        {
-          name: kind,
-          type: 'line',
-          showSymbol: false,
-          smooth: true,
-          data,
-          areaStyle: { opacity: 0.16 },
-          lineStyle: { width: 2, color: '#f59e0b' }
-        }
-      ]
+      series
     }
 
-    chart.setOption(option, true)
-  }, [points, kind])
+    let frame = 0
+    const updateIcons = (): void => {
+      const width = chart.getWidth()
+      const height = chart.getHeight()
+      if (width <= 0 || height <= 0 || points.length === 0) {
+        setChartIcons([])
+        return
+      }
 
-  return <div className="chart" ref={containerRef} />
+      const model = (
+        chart as unknown as {
+          getModel: () => { getComponent: (name: string) => ZoomModel | undefined }
+        }
+      ).getModel()
+      const range = model.getComponent('dataZoom')?.getPercentRange?.() ?? [0, 100]
+      const start = Math.max(0, Math.min(100, range[0] ?? 0))
+      const end = Math.max(0, Math.min(100, range[1] ?? 100))
+      const startIndex = (start / 100) * Math.max(0, points.length - 1)
+      const endIndex = (end / 100) * Math.max(0, points.length - 1)
+      const span = endIndex - startIndex
+      const plotWidth = width - GRID_LEFT - GRID_RIGHT
+
+      const makeIcon = (
+        point: RatingPoint,
+        match: Match,
+        index: number,
+        left: number,
+        size: number
+      ): void => {
+        const src = characterIconSrc(match.oppChar)
+        if (!src) return
+        const rawY = chart.convertToPixel({ yAxisIndex: 0 }, point.value)
+        const y = Number(Array.isArray(rawY) ? rawY[1] : rawY)
+        if (!Number.isFinite(y) || y < gridTop || y > height - GRID_BOTTOM) return
+        next.push({
+          key: `${point.id}-${match.replayId}-${index}`,
+          left,
+          top: y,
+          size,
+          src,
+          label: match.oppChar ?? '对手',
+          result: match.result,
+          delta: deltas.get(match.playedAt) ?? null
+        })
+      }
+
+      const next: ChartIcon[] = []
+      if (span <= 0) {
+        const index = Math.max(0, Math.min(points.length - 1, Math.round(startIndex)))
+        const point = points[index]
+        const match = point ? previousMatchByPointId.get(point.id) : undefined
+        if (point && match) makeIcon(point, match, index, GRID_LEFT + plotWidth / 2, 28)
+        setChartIcons(next)
+        return
+      }
+
+      const spacing = plotWidth / span
+      if (spacing < ICON_SPACING) {
+        setChartIcons([])
+        return
+      }
+
+      const size = Math.max(18, Math.min(30, spacing * 0.72))
+      const firstIndex = Math.ceil(startIndex)
+      const lastIndex = Math.floor(endIndex)
+
+      for (let index = firstIndex; index <= lastIndex; index += 1) {
+        const point = points[index]
+        if (!point) continue
+        const match = previousMatchByPointId.get(point.id)
+        if (!match) continue
+        makeIcon(
+          point,
+          match,
+          index,
+          GRID_LEFT + ((index - startIndex) / span) * plotWidth,
+          size
+        )
+      }
+
+      setChartIcons(next)
+    }
+
+    const scheduleIcons = (): void => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(updateIcons)
+    }
+
+    setChartIcons([])
+    chart.setOption(option, true)
+    iconsUpdateRef.current = scheduleIcons
+    scheduleIcons()
+    chart.on('datazoom', scheduleIcons)
+    chart.on('finished', scheduleIcons)
+
+    return () => {
+      cancelAnimationFrame(frame)
+      chart.off('datazoom', scheduleIcons)
+      chart.off('finished', scheduleIcons)
+      if (iconsUpdateRef.current === scheduleIcons) iconsUpdateRef.current = () => undefined
+    }
+  }, [points, kind, matches, deltas])
+
+  return (
+    <div
+      className="chart-wrap"
+      data-series-count={seriesCount}
+      data-icon-count={chartIcons.length}
+      data-delta-count={chartIcons.filter((icon) => icon.delta !== null).length}
+    >
+      <div className="chart" ref={containerRef} />
+      <div className="chart-icons">
+        {chartIcons.map((icon) => (
+          <span
+            key={icon.key}
+            className={`chart-icon ${icon.result}`}
+            style={{
+              left: icon.left,
+              top: icon.top,
+              width: icon.size,
+              height: icon.size
+            }}
+            title={`${icon.label} · ${resultLabel(icon.result)}`}
+          >
+            <img src={icon.src} alt={icon.label} draggable={false} />
+            {icon.delta !== null && (
+              <span className={`chart-delta ${icon.result}`}>{formatDelta(icon.delta)}</span>
+            )}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
 }

@@ -14,6 +14,10 @@ export function battleLogUrl(shortId: string, page = 1): string {
   return `https://www.streetfighter.com/6/buckler/profile/${shortId}/battlelog/rank?page=${page}`
 }
 
+export function profileUrl(shortId: string): string {
+  return `https://www.streetfighter.com/6/buckler/profile/${shortId}/`
+}
+
 export function extractNextData(html: string): unknown {
   const match = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i.exec(html)
   if (!match) return null

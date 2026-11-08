@@ -1,15 +1,21 @@
 import { session, type Session } from 'electron'
 import { readFile } from 'node:fs/promises'
-import type { Match } from '../../shared/types'
+import type { CurrentRating, Match } from '../../shared/types'
 import {
   battleLogUrl,
   cookieUrl,
   extractNextData,
+  profileUrl,
   type SavedCookie,
   type SavedSessionState
 } from './auth'
 import type { MatchSource } from './fetcher'
-import { parseBattleLog, readBattleLogPageInfo } from './parser'
+import {
+  parseBattleLog,
+  parseCurrentRatings,
+  readBattleLogPageInfo,
+  readPlayerName
+} from './parser'
 
 const PARTITION = 'persist:sf6-buckler'
 const MAX_BACKFILL_PAGES = 200
@@ -55,6 +61,7 @@ const buildHeaders = (state: SavedSessionState): Record<string, string> => {
 
 export class ElectronBucklerSource implements MatchSource {
   private readonly ses: Session
+  private readonly playerNames = new Map<string, string>()
   private ready: Promise<SavedSessionState> | null = null
 
   constructor(private readonly sessionPath: string) {
@@ -101,12 +108,9 @@ export class ElectronBucklerSource implements MatchSource {
     return state
   }
 
-  private async fetchPage(
-    shortId: string,
-    page: number
-  ): Promise<{ matches: Match[]; totalPages: number | null }> {
+  private async fetchDocument(url: string): Promise<unknown> {
     const state = await this.ensureSession()
-    const response = await this.ses.fetch(battleLogUrl(shortId, page), {
+    const response = await this.ses.fetch(url, {
       headers: buildHeaders(state),
       redirect: 'follow'
     })
@@ -140,14 +144,36 @@ export class ElectronBucklerSource implements MatchSource {
     if (!data) {
       throw new Error('页面结构变化：未找到 __NEXT_DATA__，请检查 Buckler 是否改版')
     }
+    return data
+  }
+
+  private async fetchPage(
+    shortId: string,
+    page: number
+  ): Promise<{ matches: Match[]; totalPages: number | null; playerName: string | null }> {
+    const data = await this.fetchDocument(battleLogUrl(shortId, page))
+    const playerName = readPlayerName(data, shortId)
+    if (playerName) this.playerNames.set(shortId, playerName)
     return {
       matches: parseBattleLog(data, shortId),
-      totalPages: readBattleLogPageInfo(data).totalPages
+      totalPages: readBattleLogPageInfo(data).totalPages,
+      playerName
     }
+  }
+
+  getPlayerName(shortId: string): string | null {
+    return this.playerNames.get(shortId) ?? null
   }
 
   async fetchMatches(shortId: string, page = 1): Promise<Match[]> {
     return (await this.fetchPage(shortId, page)).matches
+  }
+
+  async fetchCurrentRatings(shortId: string): Promise<CurrentRating[]> {
+    const data = await this.fetchDocument(profileUrl(shortId))
+    const playerName = readPlayerName(data, shortId)
+    if (playerName) this.playerNames.set(shortId, playerName)
+    return parseCurrentRatings(data)
   }
 
   async fetchAllMatches(shortId: string): Promise<Match[]> {

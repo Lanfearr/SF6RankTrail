@@ -13,7 +13,9 @@ import {
   findBattleLogArrays,
   normalizeMatch,
   parseBattleLog,
-  readBattleLogPageInfo
+  parseCurrentRatings,
+  readBattleLogPageInfo,
+  readPlayerName
 } from '../electron/collector/parser'
 
 interface Args {
@@ -93,6 +95,52 @@ const selfTest = (): void => {
   )
   if (secondsMatch?.playedAt !== 1794067878000) {
     throw new Error(`self-test failed: expected uploaded_at seconds, got ${secondsMatch?.playedAt}`)
+  }
+  const playerName = readPlayerName(
+    {
+      props: {
+        pageProps: {
+          fighter_banner_info: {
+            personal_info: { short_id: 'SELF', fighter_id: '测试昵称' }
+          }
+        }
+      }
+    },
+    'SELF'
+  )
+  if (playerName !== '测试昵称') {
+    throw new Error(`self-test failed: expected player name, got ${playerName}`)
+  }
+  const currentRatings = parseCurrentRatings({
+    props: {
+      pageProps: {
+        play: {
+          character_league_infos: [
+            {
+              character_name: 'Cammy',
+              is_played: true,
+              league_info: { master_rating: 0, league_point: 22842 }
+            },
+            {
+              character_name: 'Ryu',
+              is_played: true,
+              league_info: { master_rating: 1850, league_point: 0 }
+            },
+            {
+              character_name: 'Ken',
+              is_played: false,
+              league_info: { master_rating: 0, league_point: -1 }
+            }
+          ]
+        }
+      }
+    }
+  })
+  if (currentRatings.length !== 2 || currentRatings[0]?.lp !== 22842) {
+    throw new Error(`self-test failed: expected 2 current ratings, got ${currentRatings.length}`)
+  }
+  if (currentRatings[1]?.mr !== 1850) {
+    throw new Error(`self-test failed: expected Ryu MR 1850, got ${currentRatings[1]?.mr}`)
   }
   console.log('[self-test] parser OK:', JSON.stringify(match))
 }

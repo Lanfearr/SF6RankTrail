@@ -212,7 +212,17 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at    INTEGER NOT NULL,
   ended_at      INTEGER,
   start_rating  INTEGER,
-  end_rating    INTEGER
+  end_rating    INTEGER,
+  start_lp      INTEGER,
+  end_lp        INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS session_marks (
+  short_id      TEXT PRIMARY KEY REFERENCES players(short_id),
+  started_at    INTEGER NOT NULL,
+  start_mr      INTEGER,
+  start_lp      INTEGER,
+  updated_at    INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -225,7 +235,11 @@ CREATE TABLE IF NOT EXISTS settings (
 
 - 主键：`replay_id`，`INSERT OR IGNORE`。
 - 会话边界：相邻对局时间差 ≥ 3 小时 → 新 session。
-- 增量计算：相邻 `rating_points` 差值；缺失时用 Elo 估算并置 `estimated = 1`。
+- 手动会话：用户在 UI 点击刷新时写入 `session_marks`，记录点击时的最新 MR/LP 基线；统计 `played_at >= started_at` 的对局，并优先于自动会话展示。
+- 对战记录中的 `my_mr` / `my_lp` 是**比赛开始前分数**，不是赛后分数；历史评分点仍按该值入库。
+- 当前分数从个人资料页 `character_league_infos[*].league_info` 获取，写入 `source = 'snapshot'`；未变化且最新比赛后已有快照时不重复写入，新比赛后同值也会补快照。
+- 增量计算：同角色按时间排序后，用“下一场赛前分数 - 本场赛前分数”作为本场增减；最新一场使用“当前快照 - 最新赛前分数”。缺失时用 Elo 估算并置 `estimated = 1`。
+- 最新自动会话与手动会话的结束分数均优先使用当前快照，避免会话累计少算最新一场。
 - LP 与 MR 独立，不做互相换算。
 
 ---
@@ -236,6 +250,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 ```
 登录：https://www.streetfighter.com/6/buckler/  (CAPCOM ID)
+资料：https://www.streetfighter.com/6/buckler/profile/{short_id}
 战绩：https://www.streetfighter.com/6/buckler/profile/{short_id}/battlelog/rank?page={n}
 ```
 
@@ -251,6 +266,8 @@ CREATE TABLE IF NOT EXISTS settings (
 | 胜负      | `round_results` 中 `0` 计数 ≥ 2 判负 |
 | 时间戳    | 对局时间字段                         |
 | LP        | 页面提供则取，否则用 MR              |
+| 当前 MR   | 资料页 `character_league_infos[*].league_info.master_rating` |
+| 当前 LP   | 资料页 `character_league_infos[*].league_info.league_point`  |
 
 ### 6.3 运行规则
 
@@ -274,10 +291,11 @@ CREATE TABLE IF NOT EXISTS settings (
 
 - 登录：`loginWithChrome()` 启动普通 Chrome（独立 profile + 动态调试端口），等待用户手动登录；通过 `__NEXT_DATA__` 的 `loginUser.flg`、退出文案与 `/profile/{id}/` 链接识别登录成功，随后通过 `connectOverCDP` 读取 Cookie、UA 与 UA-CH，保存 `session.json` 并关闭 Chrome。
 - 采集：`ElectronBucklerSource` 把 `session.json` 的 Cookie 导入 Electron session，使用 `session.fetch` 打开 `battlelog/rank`，解析 `__NEXT_DATA__`；全程无可见窗口。
-- 分页：首次同步按页抓取全部可查询场次（读取 `total_page`，遇到空页/重复页停止，上限 200 页），完成后记录 `backfill:<shortId>`；后续轮询从第 1 页增量抓取，遇到已知场次即停止。批量回填只推送最新一条评分事件，避免 UI 抖动。对局时间取自 `uploaded_at`（Unix 秒）；单个账号抓取失败只发 `sync:warning`，不阻塞其他账号。
+- 分页：首次同步按页抓取全部可查询场次（读取 `total_page`，遇到空页/重复页停止，上限 200 页），完成后记录 `backfill:<shortId>`；后续轮询从第 1 页增量抓取，遇到已知场次即停止。批量回填只推送最新一条评分事件，避免 UI 抖动。对局时间取自 `uploaded_at`（Unix 秒）；昵称取自 `fighter_banner_info.personal_info.fighter_id`，仅在 `display_name` 为空时自动补全；单个账号抓取失败只发 `sync:warning`，不阻塞其他账号。
 - 同步：`SyncService` 每 20s 拉取一次，按 `replay_id` 去重；新对局写入 `matches` 与 `rating_points`，并重建 `sessions`。
+- 当前分数：每轮同步比赛后额外抓取资料页，解析 `character_league_infos` 的 MR/LP，写入 `rating_points(source='snapshot')`；抓取失败只发一次 `当前分数获取失败` 告警，不阻塞对局同步。
 - 推送：新对局/评分/会话通过 `RealtimeHub` 广播；同步状态同时写入快照。
-- 账号：`auth:login` 异步执行登录并在成功后自动启动同步；`players:add` 增删账号后自动重启同步。
+- 账号：`auth:login` 异步执行登录并在成功后自动启动同步；`players:add` 可附带昵称，`players:remove` 删除账号及其对局/评分/会话数据，增删后自动重启同步。
 - 失败处理：403/401/登录跳转/Cloudflare 挑战页会返回明确错误，提示重新登录；连续 3 次 0 对局触发 `sync:warning`。
 
 ---
@@ -291,9 +309,11 @@ CREATE TABLE IF NOT EXISTS settings (
 | `auth:login`                    | invoke | `{ shortId }`                 |
 | `auth:status`                   | invoke | → `{ loggedIn, shortId? }`    |
 | `players:list`                  | invoke | → `Player[]`                  |
-| `players:add`                   | invoke | `{ cfn }`                     |
+| `players:add`                   | invoke | `{ cfn, displayName? }`       |
+| `players:remove`                | invoke | `shortId`                     |
 | `matches:list`                  | invoke | `{ shortId, limit, offset }`  |
 | `ratings:series`                | invoke | `{ shortId, kind, from, to }` |
+| `session:refresh`               | invoke | `shortId` → `SessionSummary`  |
 | `settings:get` / `settings:set` | invoke | `{ key, value }`              |
 | `window:setAlwaysOnTop`         | send   | `boolean`                     |
 | `window:setOpacity`             | send   | `number`                      |
@@ -321,15 +341,21 @@ type ServerEvent =
 ### 8.1 Mini 模式
 
 - 显示：当前 LP/MR、本场 ±、本会话累计 ±、胜负、胜率
+- MR/LP 手动切换，记忆在 `settings.miniKind`
+- 刷新按钮：重置手动会话；同步运行中时立即触发一次同步
 - 角色为 Master 显示 MR，否则显示 LP（自动切换）
 - 数字滚动动画；数据时间角标
 - 记忆位置/尺寸/透明度
 
 ### 8.2 Pro 模式
 
+- 顶部大字显示本次会话净上分，并展示会话场次、胜/负；刷新按钮重置手动会话
 - ECharts 折线：横轴为场次（每场一个评分点），日期标签只在每天首场显示一次；LP/MR 切换
 - 支持缩放、框选、拖拽平移、回到总览
 - 按角色过滤；对局列表与可见时间范围联动
+- 对局列表显示对手圆形角色图标：胜绿框、负红框、平黄框；图标底部居中显示单场 ± 分，颜色与边框一致
+- 默认选中最近使用的角色；选择「全部角色」时每个角色一条折线
+- 图表缩放后相邻点位间距足够时，在对应赛后数据点（同角色下一场赛前分数或当前快照）显示对手圆形图标，并在图标上方显示该场单场 ± 分
 - 胜率统计
 
 ### 8.3 OBS
@@ -468,6 +494,9 @@ npm run spike:m0 -- --short-id <Buckler_ID> --channel chrome --dump
 | 2026-11-08 | M6 加固        | 连续 3 次零对局触发 `sync:warning`；限速/退避沿用；`spike:uitest` 校验 Mini/Pro 尺寸切换与 overlay                                                                                                             |
 | 2026-11-08 | 登录/采集重构  | 登录改为普通 Chrome（独立 profile + CDP）手动完成人机验证；保存 `session.json`；同步改为 Electron `session.fetch` 静默抓取，无可见 Chrome 窗口；`spike:netcheck` 返回 200；真实账号登录与 battlelog 抓取待验证 |
 | 2026-11-08 | 全量场次/图表  | 首次同步分页回填全部可查询场次，后续增量；Pro 横轴按场次，日期标签每天一次；`spike:m1test` 覆盖回填批量事件                                                                                                    |
+| 2026-11-08 | 账号标签       | 账号显示昵称/shortId；添加时可选昵称；Pro 标签右上角删除并级联清理；采集自动补全昵称；`spike:uitest` 使用临时 userData 验证增删标签                                                                          |
+| 2026-11-08 | 手动会话/图标  | Mini MR/LP 手动切换与刷新；Pro 大字本次会话净上分；32 个角色图标与单场 ± badge；`session_marks` 手动会话基线；`spike:uitest` 覆盖 LP、图标、刷新  |
+| 2026-11-09 | 分数系统修正   | 对战记录明确为赛前分数；资料页当前 MR/LP 写入 snapshot；单场增减归属上一场，最新场用当前快照；最新自动/手动会话使用当前分数；图表图标后移至赛后数据点并显示单场 ±；自测覆盖当前快照与 UI badge |
 
 ---
 

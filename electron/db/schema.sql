@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   end_lp        INTEGER
 );
 
+CREATE TABLE IF NOT EXISTS session_marks (
+  short_id      TEXT PRIMARY KEY REFERENCES players(short_id),
+  started_at    INTEGER NOT NULL,
+  start_mr      INTEGER,
+  start_lp      INTEGER,
+  updated_at    INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key           TEXT PRIMARY KEY,
   value         TEXT NOT NULL

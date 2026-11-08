@@ -20,6 +20,7 @@ export class SyncService {
   private shortIds: string[] = []
   private readonly zeroStreak = new Map<string, number>()
   private readonly failed = new Set<string>()
+  private readonly currentFailed = new Set<string>()
 
   constructor(
     private readonly repo: Repository,
@@ -85,13 +86,40 @@ export class SyncService {
       recent = await this.fetchRecent(shortId)
     }
 
+    const playerName = this.source.getPlayerName?.(shortId)
+    if (playerName) this.repo.setDisplayNameIfEmpty(shortId, playerName)
+
     const inserted = this.storeMatches(shortId, recent.matches)
     if (needsBackfill) this.repo.setSetting(backfillKey, '1')
+
+    let currentRatings: RatingPoint[] = []
+    if (this.source.fetchCurrentRatings) {
+      try {
+        currentRatings = this.repo.recordCurrentRatings(
+          shortId,
+          await this.source.fetchCurrentRatings(shortId)
+        )
+        this.currentFailed.delete(shortId)
+      } catch (error) {
+        if (!this.currentFailed.has(shortId)) {
+          this.currentFailed.add(shortId)
+          const message = error instanceof Error ? error.message : String(error)
+          this.emit({
+            type: 'sync:warning',
+            payload: { shortId, message: `当前分数获取失败：${message}` }
+          })
+        }
+      }
+    }
 
     this.repo.rebuildSessions(shortId)
     this.repo.markSynced(shortId)
 
-    const session = this.repo.getLatestSession(shortId)
+    for (const point of currentRatings) {
+      this.emit({ type: 'rating:update', payload: point })
+    }
+
+    const session = this.repo.getActiveSession(shortId)
     if (session) {
       this.emit({ type: 'session:update', payload: session })
     }

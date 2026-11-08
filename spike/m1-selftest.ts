@@ -71,6 +71,12 @@ const main = async (): Promise<void> => {
   const latest = repo.getLatestSession('SELF')
   assert.equal(latest?.matches, 1)
 
+  const manualStart = base + 11 * 60 * 1000
+  const manual = repo.startSession('SELF', manualStart)
+  assert.equal(manual.matches, 1)
+  assert.equal(manual.ratingDelta, 0)
+  assert.equal(repo.getActiveSession('SELF')?.startedAt, manualStart)
+
   const second: SyncResult = await service.sync('SELF')
   assert.equal(second.inserted, 0, 're-sync must not duplicate')
   assert.equal(repo.listMatches({ shortId: 'SELF' }).length, 4)
@@ -86,12 +92,18 @@ const main = async (): Promise<void> => {
   assert.equal(latestAfter?.matches, 2)
   assert.equal(latestAfter?.ratingDelta, 1820 - 1830)
 
+  const manualAfter = repo.getManualSession('SELF')
+  assert.equal(manualAfter?.matches, 2)
+  assert.equal(manualAfter?.wins, 1)
+  assert.equal(manualAfter?.ratingDelta, 1820 - 1830)
+
   const matchEvents = events.filter((event) => event.type === 'match:new').length
   assert.equal(matchEvents, 5)
 
   const selfDashboard = repo.getDashboard('SELF')
   assert.equal(selfDashboard?.latestMr?.value, 1820)
   assert.equal(selfDashboard?.latestLp, null)
+  assert.equal(selfDashboard?.session?.startedAt, manualStart)
   assert.equal(selfDashboard?.session?.ratingDelta, -10)
   assert.equal(selfDashboard?.session?.lpDelta, null)
 
@@ -118,6 +130,39 @@ const main = async (): Promise<void> => {
   assert.equal(lpDashboard?.latestMr, null)
   assert.equal(lpDashboard?.session?.lpDelta, 100)
   assert.equal(repo.listDashboards().length, 2)
+
+  repo.upsertPlayer({ shortId: 'CURRENTUSER', cfn: 'CurrentUser' })
+  const currentMatches: Match[] = [
+    { ...makeMatch(90, 'win', 1800), shortId: 'CURRENTUSER' },
+    { ...makeMatch(95, 'loss', 1810), shortId: 'CURRENTUSER' }
+  ]
+  const currentService = new SyncService(
+    repo,
+    {
+      async fetchMatches() {
+        return currentMatches
+      },
+      async fetchCurrentRatings() {
+        return [{ character: 'Ryu', mr: 1780, lp: null }]
+      }
+    },
+    (event) => events.push(event),
+    (status) => statuses.push(status.state)
+  )
+  await currentService.sync('CURRENTUSER')
+  const currentDashboard = repo.getDashboard('CURRENTUSER')
+  assert.equal(currentDashboard?.latestMr?.value, 1780)
+  assert.equal(currentDashboard?.latestMr?.character, 'Ryu')
+  assert.equal(
+    currentDashboard?.session?.ratingDelta,
+    -20,
+    'latest automatic session should use the current snapshot as its end rating'
+  )
+  assert.equal(
+    repo.listRatings({ shortId: 'CURRENTUSER', kind: 'MR' }).filter((point) => point.source === 'snapshot')
+      .length,
+    1
+  )
 
   const emptySource = new SyncService(
     repo,
@@ -150,6 +195,9 @@ const main = async (): Promise<void> => {
       async fetchAllMatches() {
         fetchAllCalls += 1
         return backfillFeed
+      },
+      getPlayerName() {
+        return '回填昵称'
       }
     },
     (event) => backfillEvents.push(event),
@@ -158,6 +206,10 @@ const main = async (): Promise<void> => {
   const backfillResult = await backfillService.sync('BACKFILL')
   assert.equal(backfillResult.inserted, 12)
   assert.equal(fetchAllCalls, 1)
+  assert.equal(
+    repo.listPlayers().find((player) => player.shortId === 'BACKFILL')?.displayName,
+    '回填昵称'
+  )
   assert.equal(repo.getSetting('backfill:BACKFILL'), '1')
   assert.equal(repo.listRatings({ shortId: 'BACKFILL', kind: 'MR' }).length, 12)
   assert.equal(
