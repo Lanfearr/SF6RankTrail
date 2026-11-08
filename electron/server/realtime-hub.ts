@@ -4,6 +4,7 @@ import type { AppSnapshot, ServerEvent } from '../../shared/types'
 
 const emptySnapshot = (): AppSnapshot => ({
   players: [],
+  dashboards: [],
   sync: { state: 'idle', at: Date.now() },
   at: Date.now()
 })

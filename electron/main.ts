@@ -10,8 +10,13 @@ import type {
 } from '../shared/types'
 import { openDatabase } from './db/migrate'
 import { Repository } from './db/repository'
-import { loginInteractively, readStorageState } from './collector/auth'
-import { BattleLogSource } from './collector/fetcher'
+import {
+  closeActiveLogin,
+  hasSavedSession,
+  loginWithChrome,
+  type LoginOptions
+} from './collector/auth'
+import { ElectronBucklerSource } from './collector/electron-fetcher'
 import { SyncService } from './collector/sync-service'
 import { RealtimeHub } from './server/realtime-hub'
 import { OverlayServer } from './server/overlay-server'
@@ -24,9 +29,23 @@ let repo: Repository
 let hub: RealtimeHub
 let overlay: OverlayServer
 let syncService: SyncService | null = null
-let source: BattleLogSource | null = null
-let statePath = ''
+let source: ElectronBucklerSource | null = null
+let sessionPath = ''
+let profileDir = ''
+let loginInFlight = false
 let syncStatus: SyncStatus = { state: 'idle', at: Date.now() }
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
+}
 
 function setStatus(status: SyncStatus): void {
   syncStatus = status
@@ -36,7 +55,7 @@ function setStatus(status: SyncStatus): void {
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 440,
-    height: 320,
+    height: 340,
     show: false,
     frame: false,
     transparent: true,
@@ -64,6 +83,12 @@ function trackedShortIds(): string[] {
   return repo.listPlayers().map((player) => player.shortId)
 }
 
+function readSyncInterval(): number {
+  const raw = Number(repo.getSetting('syncIntervalMs') ?? String(SYNC_INTERVAL_MS))
+  if (!Number.isFinite(raw)) return SYNC_INTERVAL_MS
+  return Math.max(15_000, Math.min(120_000, raw))
+}
+
 async function stopSync(): Promise<void> {
   syncService?.stop()
   syncService = null
@@ -76,29 +101,31 @@ function startSync(): SyncStartResult {
   if (shortIds.length === 0) {
     return { ok: false, players: 0, message: '没有追踪账号，请先登录或添加账号' }
   }
-  if (!readStorageState(statePath)) {
+  if (!hasSavedSession(sessionPath)) {
     return { ok: false, players: shortIds.length, message: '未登录，请先完成 CAPCOM ID 登录' }
   }
 
   syncService?.stop()
   void source?.close()
-  source = new BattleLogSource(statePath)
-  syncService = new SyncService(
-    repo,
-    source,
-    (event) => hub?.broadcast(event),
-    setStatus
-  )
-  syncService.start(shortIds, SYNC_INTERVAL_MS)
+  source = new ElectronBucklerSource(sessionPath)
+  syncService = new SyncService(repo, source, (event) => hub?.broadcast(event), setStatus)
+  syncService.start(shortIds, readSyncInterval())
   return { ok: true, players: shortIds.length }
 }
 
 async function runLogin(input: PlayerInput): Promise<void> {
-  setStatus({ state: 'syncing', at: Date.now(), message: '请在打开的浏览器中完成登录' })
+  if (loginInFlight) return
+  loginInFlight = true
+  setStatus({ state: 'syncing', at: Date.now(), message: '正在打开 Chrome…' })
+
+  const options: LoginOptions = {
+    expectedShortId: input.shortId ?? input.cfn,
+    onProgress: (message) => setStatus({ state: 'syncing', at: Date.now(), message })
+  }
+
   try {
-    const expectedShortId = input.shortId ?? input.cfn
-    const result = await loginInteractively(statePath, { expectedShortId })
-    const shortId = result.shortId ?? expectedShortId
+    const result = await loginWithChrome(profileDir, sessionPath, options)
+    const shortId = result.shortId ?? options.expectedShortId
 
     if (!result.ok || !shortId) {
       setStatus({
@@ -118,18 +145,20 @@ async function runLogin(input: PlayerInput): Promise<void> {
       at: Date.now(),
       message: error instanceof Error ? error.message : String(error)
     })
+  } finally {
+    loginInFlight = false
   }
 }
 
 function registerIpc(): void {
   ipcMain.handle('auth:login', async (_event, input: PlayerInput): Promise<LoginResult> => {
     void runLogin(input)
-    return { ok: true, message: '已打开登录窗口，请在浏览器中完成登录' }
+    return { ok: true, message: '正在打开 Chrome，请在窗口中完成登录' }
   })
 
   ipcMain.handle('auth:status', async () => {
     const self = repo.listPlayers().find((player) => player.isSelf)
-    return { loggedIn: Boolean(self) && readStorageState(statePath), shortId: self?.shortId }
+    return { loggedIn: hasSavedSession(sessionPath), shortId: self?.shortId }
   })
 
   ipcMain.handle('players:list', async () => repo.listPlayers())
@@ -138,7 +167,7 @@ function registerIpc(): void {
     const shortId = input.shortId ?? input.cfn
     if (!shortId) return null
     const player = repo.upsertPlayer({ shortId, cfn: input.cfn })
-    if (syncService?.isRunning() && readStorageState(statePath)) {
+    if (syncService?.isRunning() && hasSavedSession(sessionPath)) {
       startSync()
     }
     return player
@@ -147,6 +176,8 @@ function registerIpc(): void {
   ipcMain.handle('matches:list', async (_event, query: MatchQuery) => repo.listMatches(query))
 
   ipcMain.handle('ratings:series', async (_event, query: RatingQuery) => repo.listRatings(query))
+
+  ipcMain.handle('dashboard:list', async () => repo.listDashboards())
 
   ipcMain.handle('sync:start', async (): Promise<SyncStartResult> => startSync())
 
@@ -161,6 +192,9 @@ function registerIpc(): void {
 
   ipcMain.handle('settings:set', async (_event, key: string, value: string) => {
     repo.setSetting(key, value)
+    if (key === 'syncIntervalMs' && syncService?.isRunning()) {
+      startSync()
+    }
   })
 
   ipcMain.on('window:setAlwaysOnTop', (_event, value: boolean) => {
@@ -172,10 +206,24 @@ function registerIpc(): void {
     const clamped = Math.min(1, Math.max(0.2, Number(value)))
     mainWindow.setOpacity(clamped)
   })
+
+  ipcMain.on('window:setMode', (_event, mode: 'mini' | 'pro') => {
+    if (!mainWindow) return
+    if (mode === 'pro') {
+      mainWindow.setAlwaysOnTop(false)
+      mainWindow.setSize(960, 660)
+    } else {
+      mainWindow.setAlwaysOnTop(true)
+      mainWindow.setSize(440, 340)
+    }
+    mainWindow.center()
+  })
 }
 
 app.whenReady().then(async () => {
-  statePath = join(app.getPath('userData'), 'storage.json')
+  if (!hasSingleInstanceLock) return
+  sessionPath = join(app.getPath('userData'), 'session.json')
+  profileDir = join(app.getPath('userData'), 'chrome-profile')
   const db = openDatabase(join(app.getPath('userData'), 'sf6scorer.db'))
   repo = new Repository(db)
   hub = new RealtimeHub()
@@ -183,6 +231,7 @@ app.whenReady().then(async () => {
 
   hub.setSnapshotProvider(() => ({
     players: repo.listPlayers(),
+    dashboards: repo.listDashboards(),
     sync: syncStatus,
     at: Date.now()
   }))
@@ -197,7 +246,7 @@ app.whenReady().then(async () => {
   registerIpc()
   createWindow()
 
-  if (readStorageState(statePath) && repo.listPlayers().length > 0) {
+  if (hasSavedSession(sessionPath) && repo.listPlayers().length > 0) {
     const result = startSync()
     if (!result.ok && result.message) {
       setStatus({ state: 'error', at: Date.now(), message: result.message })
@@ -216,6 +265,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   syncService?.stop()
   void source?.close()
+  void closeActiveLogin()
   hub?.close()
   overlay?.stop()
 })

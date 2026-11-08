@@ -2,8 +2,10 @@ import type {
   Match,
   MatchQuery,
   Player,
+  PlayerDashboard,
   RatingPoint,
   RatingQuery,
+  RatingSnapshot,
   SessionSummary
 } from '../../shared/types'
 import type { Db } from './migrate'
@@ -50,11 +52,14 @@ interface SessionRow {
   ended_at: number | null
   start_rating: number | null
   end_rating: number | null
+  start_lp: number | null
+  end_lp: number | null
 }
 
 interface MatchTimeRow {
   played_at: number
   my_mr: number | null
+  my_lp: number | null
 }
 
 interface SessionStatsRow {
@@ -132,8 +137,7 @@ export class Repository {
       )
 
     const row = this.db.prepare('SELECT * FROM players WHERE short_id = ?').get(input.shortId) as
-      | PlayerRow
-      | undefined
+      PlayerRow | undefined
     if (!row) throw new Error(`player not found after upsert: ${input.shortId}`)
     return toPlayer(row)
   }
@@ -172,6 +176,11 @@ export class Repository {
         match.createdAt
       ) as unknown as RunResult
     return Number(info.changes) > 0
+  }
+
+  hasMatch(replayId: string): boolean {
+    const row = this.db.prepare('SELECT 1 AS ok FROM matches WHERE replay_id = ?').get(replayId)
+    return Boolean(row)
   }
 
   listMatches(query: MatchQuery): Match[] {
@@ -229,14 +238,18 @@ export class Repository {
 
   rebuildSessions(shortId: string): void {
     const rows = this.db
-      .prepare('SELECT played_at, my_mr FROM matches WHERE short_id = ? ORDER BY played_at ASC')
+      .prepare(
+        'SELECT played_at, my_mr, my_lp FROM matches WHERE short_id = ? ORDER BY played_at ASC'
+      )
       .all(shortId) as unknown as MatchTimeRow[]
 
     this.db.exec('BEGIN')
     try {
       this.db.prepare('DELETE FROM sessions WHERE short_id = ?').run(shortId)
       const insert = this.db.prepare(
-        'INSERT INTO sessions (short_id, started_at, ended_at, start_rating, end_rating) VALUES (?, ?, ?, ?, ?)'
+        `INSERT INTO sessions
+          (short_id, started_at, ended_at, start_rating, end_rating, start_lp, end_lp)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
 
       let current: {
@@ -244,6 +257,8 @@ export class Repository {
         end: number
         startRating: number | null
         endRating: number | null
+        startLp: number | null
+        endLp: number | null
       } | null = null
 
       const flush = (): void => {
@@ -253,7 +268,9 @@ export class Repository {
           current.start,
           current.end,
           current.startRating,
-          current.endRating
+          current.endRating,
+          current.startLp,
+          current.endLp
         )
         current = null
       }
@@ -265,11 +282,14 @@ export class Repository {
             start: row.played_at,
             end: row.played_at,
             startRating: row.my_mr,
-            endRating: row.my_mr
+            endRating: row.my_mr,
+            startLp: row.my_lp,
+            endLp: row.my_lp
           }
         } else {
           current.end = row.played_at
           if (row.my_mr !== null) current.endRating = row.my_mr
+          if (row.my_lp !== null) current.endLp = row.my_lp
         }
       }
 
@@ -306,13 +326,13 @@ export class Repository {
          WHERE short_id = ? AND played_at >= ? AND played_at <= ?`
       )
       .get(row.short_id, row.started_at, row.ended_at ?? row.started_at) as
-      | SessionStatsRow
-      | undefined
+      SessionStatsRow | undefined
 
     const ratingDelta =
       row.start_rating !== null && row.end_rating !== null
         ? row.end_rating - row.start_rating
         : null
+    const lpDelta = row.start_lp !== null && row.end_lp !== null ? row.end_lp - row.start_lp : null
 
     return {
       shortId: row.short_id,
@@ -321,14 +341,62 @@ export class Repository {
       matches: Number(stats?.matches ?? 0),
       wins: Number(stats?.wins ?? 0),
       losses: Number(stats?.losses ?? 0),
-      ratingDelta
+      ratingDelta,
+      lpDelta
     }
+  }
+
+  getLatestRating(shortId: string, kind: RatingPoint['kind']): RatingPoint | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM rating_points
+         WHERE short_id = ? AND kind = ?
+         ORDER BY observed_at DESC, id DESC
+         LIMIT 1`
+      )
+      .get(shortId, kind) as RatingRow | undefined
+    return row ? toRating(row) : null
+  }
+
+  getDashboard(shortId: string): PlayerDashboard | null {
+    const player = this.db.prepare('SELECT * FROM players WHERE short_id = ?').get(shortId) as
+      PlayerRow | undefined
+    if (!player) return null
+
+    const toSnapshot = (point: RatingPoint | null): RatingSnapshot | null =>
+      point
+        ? {
+            kind: point.kind,
+            value: point.value,
+            character: point.character,
+            observedAt: point.observedAt
+          }
+        : null
+
+    return {
+      player: toPlayer(player),
+      latestMr: toSnapshot(this.getLatestRating(shortId, 'MR')),
+      latestLp: toSnapshot(this.getLatestRating(shortId, 'LP')),
+      session: this.getLatestSession(shortId)
+    }
+  }
+
+  listDashboards(): PlayerDashboard[] {
+    return this.listPlayers()
+      .map((player) => this.getDashboard(player.shortId))
+      .filter((dashboard): dashboard is PlayerDashboard => dashboard !== null)
+  }
+
+  countMatches(shortId: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS total FROM matches WHERE short_id = ?')
+      .get(shortId) as { total: number } | undefined
+    return Number(row?.total ?? 0)
   }
 
   getSetting(key: string): string | null {
     const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as
-      | { value: string }
-      | undefined
+      { value: string } | undefined
     return row?.value ?? null
   }
 

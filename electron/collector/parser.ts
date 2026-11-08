@@ -2,8 +2,7 @@ import type { Match, MatchResult } from '../../shared/types'
 
 type Json = Record<string, unknown>
 
-const isObject = (v: unknown): v is Json =>
-  typeof v === 'object' && v !== null && !Array.isArray(v)
+const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 const pick = (obj: Json, keys: string[]): unknown => {
   for (const key of keys) {
@@ -40,9 +39,51 @@ const asTime = (v: unknown): number | null => {
 const looksLikeBattle = (v: unknown): boolean => {
   if (!isObject(v)) return false
   const hasReplay = 'replay_id' in v || 'replayId' in v
-  const hasPlayers =
-    'player1_info' in v || 'player2_info' in v || 'player1' in v || 'player2' in v
+  const hasPlayers = 'player1_info' in v || 'player2_info' in v || 'player1' in v || 'player2' in v
   return hasReplay && hasPlayers
+}
+
+export interface BattleLogPageInfo {
+  totalPages: number | null
+  currentPage: number | null
+}
+
+const readNumericField = (data: unknown, pattern: RegExp): number | null => {
+  let found: number | null = null
+  const seen = new Set<unknown>()
+
+  const walk = (node: unknown, depth: number): void => {
+    if (found !== null || depth > 8 || node === null || typeof node !== 'object') return
+    if (seen.has(node)) return
+    seen.add(node)
+
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1)
+      return
+    }
+
+    for (const [key, value] of Object.entries(node as Json)) {
+      if (pattern.test(key)) {
+        const parsed = asNumber(value)
+        if (parsed !== null && parsed > 0) {
+          found = parsed
+          return
+        }
+      }
+      walk(value, depth + 1)
+      if (found !== null) return
+    }
+  }
+
+  walk(data, 0)
+  return found
+}
+
+export function readBattleLogPageInfo(data: unknown): BattleLogPageInfo {
+  return {
+    totalPages: readNumericField(data, /^(?:total_?pages?|last_?pages?|max_?pages?|page_?count)$/i),
+    currentPage: readNumericField(data, /^(?:current_?page|page_?no|page_?num)$/i)
+  }
 }
 
 export function findBattleLogArrays(data: unknown): unknown[][] {
@@ -74,11 +115,7 @@ interface SideInfo {
 const readSide = (raw: unknown): SideInfo | null => {
   if (!isObject(raw)) return null
   const info = isObject(raw.info) ? raw.info : raw
-  const player = isObject(info.player)
-    ? info.player
-    : isObject(raw.player)
-      ? raw.player
-      : {}
+  const player = isObject(info.player) ? info.player : isObject(raw.player) ? raw.player : {}
   const roundsRaw = pick(info, ['round_results', 'roundResults'])
   const rounds = Array.isArray(roundsRaw)
     ? roundsRaw.map((r) => (typeof r === 'number' ? r : Number(r))).filter(Number.isFinite)
@@ -116,7 +153,16 @@ export function normalizeMatch(raw: unknown, ownerShortId: string): Match | null
   const opp = me === side1 ? side2 : side1
 
   const playedAt = asTime(
-    pick(raw, ['played_at', 'playedAt', 'battle_at', 'battleAt', 'replay_battle_at', 'time'])
+    pick(raw, [
+      'played_at',
+      'playedAt',
+      'battle_at',
+      'battleAt',
+      'replay_battle_at',
+      'uploaded_at',
+      'uploadedAt',
+      'time'
+    ])
   )
 
   return {

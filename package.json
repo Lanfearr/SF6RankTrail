@@ -12,11 +12,13 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write .",
-    "dist": "electron-vite build && electron-builder",
+    "dist": "electron-vite build && electron-builder --config.electronDist=node_modules/electron/dist",
     "spike:m0": "tsx spike/m0.ts",
     "spike:selftest": "tsx spike/m0.ts --self-test",
     "spike:dbtest": "tsx spike/db-selftest.ts",
-    "spike:m1test": "tsx spike/m1-selftest.ts"
+    "spike:m1test": "tsx spike/m1-selftest.ts",
+    "spike:uitest": "tsx spike/ui-selftest.ts",
+    "spike:netcheck": "electron spike/electron-fetch-check.cjs"
   },
   "dependencies": {
     "express": "^4.21.2",

@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   started_at    INTEGER NOT NULL,
   ended_at      INTEGER,
   start_rating  INTEGER,
-  end_rating    INTEGER
+  end_rating    INTEGER,
+  start_lp      INTEGER,
+  end_lp        INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS settings (

@@ -6,6 +6,8 @@ dist/
 *.db-shm
 *.db-wal
 storage.json
+session.json
+chrome-profile/
 .DS_Store
 spike/out/
 .env

@@ -1,10 +1,20 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { createInterface } from 'node:readline/promises'
 import { chromium } from 'playwright'
 import type { Match } from '../shared/types'
-import { BUCKLER_HOME, battleLogUrl, extractNextData } from '../electron/collector/auth'
-import { findBattleLogArrays, parseBattleLog } from '../electron/collector/parser'
+import {
+  BUCKLER_HOME,
+  battleLogUrl,
+  extractNextData,
+  hasSavedSession,
+  loginWithChrome
+} from '../electron/collector/auth'
+import {
+  findBattleLogArrays,
+  normalizeMatch,
+  parseBattleLog,
+  readBattleLogPageInfo
+} from '../electron/collector/parser'
 
 interface Args {
   [key: string]: string | boolean
@@ -53,17 +63,38 @@ const selfTest = (): void => {
     }
   }
   const matches = parseBattleLog(sample, 'SELF')
-  if (matches.length !== 1) throw new Error(`self-test failed: expected 1 match, got ${matches.length}`)
+  if (matches.length !== 1)
+    throw new Error(`self-test failed: expected 1 match, got ${matches.length}`)
   const match = matches[0] as Match
   if (match.result !== 'win') throw new Error(`self-test failed: expected win, got ${match.result}`)
   if (match.myMr !== 1800) throw new Error(`self-test failed: expected MR 1800, got ${match.myMr}`)
+  const pageInfo = readBattleLogPageInfo({
+    props: { pageProps: { pagination: { total_pages: 3, current_page: 1 } } }
+  })
+  if (pageInfo.totalPages !== 3) {
+    throw new Error(`self-test failed: expected 3 pages, got ${pageInfo.totalPages}`)
+  }
+  const secondsMatch = normalizeMatch(
+    {
+      replay_id: 'seconds-test',
+      uploaded_at: 1794067878,
+      player1_info: {
+        player: { short_id: 'SELF' },
+        round_results: [1, 1],
+        playing_character_name: 'Ryu'
+      },
+      player2_info: {
+        player: { short_id: 'OTHER' },
+        round_results: [0, 0],
+        playing_character_name: 'Ken'
+      }
+    },
+    'SELF'
+  )
+  if (secondsMatch?.playedAt !== 1794067878000) {
+    throw new Error(`self-test failed: expected uploaded_at seconds, got ${secondsMatch?.playedAt}`)
+  }
   console.log('[self-test] parser OK:', JSON.stringify(match))
-}
-
-const waitForEnter = async (prompt: string): Promise<void> => {
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-  await rl.question(prompt)
-  rl.close()
 }
 
 const saveCaptured = (
@@ -97,39 +128,35 @@ const main = async (): Promise<void> => {
       : typeof args['cfn'] === 'string'
         ? args['cfn']
         : process.env['SF6_SHORT_ID']
-  const statePath = resolve(
-    typeof args['state'] === 'string' ? args['state'] : 'spike/out/storage.json'
+  const sessionPath = resolve(
+    typeof args['session'] === 'string' ? args['session'] : 'spike/out/session.json'
+  )
+  const profileDir = resolve(
+    typeof args['profile'] === 'string' ? args['profile'] : 'spike/out/chrome-profile'
   )
   const outDir = resolve('spike/out')
   const headless = Boolean(args['headless'])
   const dump = Boolean(args['dump'])
-  const channel = typeof args['channel'] === 'string' ? args['channel'] : undefined
+  const channel = typeof args['channel'] === 'string' ? args['channel'] : 'chrome'
   const executablePath =
     typeof args['executable-path'] === 'string' ? args['executable-path'] : undefined
-  const userAgent =
-    typeof args['ua'] === 'string'
-      ? args['ua']
-      : 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
 
-  const browser = await chromium.launch({
+  if (!hasSavedSession(sessionPath)) {
+    const login = await loginWithChrome(profileDir, sessionPath, { channel })
+    console.log(`[m0] ${login.message ?? ''}`)
+    if (!login.ok) {
+      process.exitCode = 1
+      return
+    }
+  }
+
+  const context = await chromium.launchPersistentContext(profileDir, {
     headless,
     channel,
     executablePath,
     args: ['--disable-blink-features=AutomationControlled']
   })
-
-  const context = await browser.newContext({
-    storageState: existsSync(statePath) ? statePath : undefined,
-    locale: 'en-US',
-    userAgent,
-    viewport: { width: 1366, height: 900 },
-    timezoneId: 'America/New_York',
-    extraHTTPHeaders: { 'Accept-Language': 'en-US,en;q=0.9' }
-  })
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
-  })
-  const page = await context.newPage()
+  const page = context.pages()[0] ?? (await context.newPage())
 
   if (args['probe']) {
     const response = await page.goto(BUCKLER_HOME, {
@@ -138,7 +165,7 @@ const main = async (): Promise<void> => {
     })
     console.log(`[probe] status=${response?.status()} url=${page.url()}`)
     console.log(`[probe] title=${await page.title()}`)
-    await browser.close()
+    await context.close()
     return
   }
 
@@ -158,24 +185,15 @@ const main = async (): Promise<void> => {
   console.log(`[m0] 打开 ${target}`)
   await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60_000 })
 
-  const needsLogin = /login|signin|sign-in/i.test(page.url())
-  if (needsLogin || !shortId) {
-    console.log('[m0] 请在已打开的浏览器中完成 CAPCOM ID 登录。')
-    await waitForEnter('[m0] 登录完成后，回到终端按 Enter 继续…')
-    await context.storageState({ path: statePath })
-    console.log(`[m0] 已保存登录态到 ${statePath}`)
-    if (!shortId) {
-      console.log('[m0] 请带 --short-id <Buckler ID> 重新运行以抓取战绩。')
-      await browser.close()
-      return
-    }
+  if (!shortId) {
+    console.log('[m0] 已登录。请带 --short-id <Buckler ID> 重新运行以抓取战绩。')
+    await context.close()
+    return
   }
 
-  if (shortId) {
-    console.log(`[m0] 抓取战绩页 ${battleLogUrl(shortId)}`)
-    await page.goto(battleLogUrl(shortId), { waitUntil: 'networkidle', timeout: 60_000 })
-    await page.waitForTimeout(1500)
-  }
+  console.log(`[m0] 抓取战绩页 ${battleLogUrl(shortId)}`)
+  await page.goto(battleLogUrl(shortId), { waitUntil: 'networkidle', timeout: 60_000 })
+  await page.waitForTimeout(1500)
 
   const html = await page.content()
   const nextData = extractNextData(html)
@@ -227,8 +245,7 @@ const main = async (): Promise<void> => {
     console.log(`\n[m0] 原始数据已写入 ${outDir}`)
   }
 
-  await context.storageState({ path: statePath })
-  await browser.close()
+  await context.close()
 
   if (matches.length === 0) {
     console.log('[m0] 未解析出对局。请检查 spike/out/page.html 与 candidate-*/payload.json，')

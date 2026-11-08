@@ -46,6 +46,21 @@ export interface SessionSummary {
   wins: number
   losses: number
   ratingDelta: number | null
+  lpDelta: number | null
+}
+
+export interface RatingSnapshot {
+  kind: RatingKind
+  value: number
+  character: string | null
+  observedAt: number
+}
+
+export interface PlayerDashboard {
+  player: Player
+  latestMr: RatingSnapshot | null
+  latestLp: RatingSnapshot | null
+  session: SessionSummary | null
 }
 
 export interface SyncStatus {
@@ -56,8 +71,14 @@ export interface SyncStatus {
 
 export interface AppSnapshot {
   players: Player[]
+  dashboards: PlayerDashboard[]
   sync: SyncStatus
   at: number
+}
+
+export interface SyncWarning {
+  shortId: string
+  message: string
 }
 
 export type ServerEvent =
@@ -65,6 +86,7 @@ export type ServerEvent =
   | { type: 'rating:update'; payload: RatingPoint }
   | { type: 'session:update'; payload: SessionSummary }
   | { type: 'sync:status'; payload: SyncStatus }
+  | { type: 'sync:warning'; payload: SyncWarning }
   | { type: 'snapshot'; payload: AppSnapshot }
 
 export interface LoginResult {
@@ -110,6 +132,7 @@ export interface IpcApi {
   addPlayer: (input: PlayerInput) => Promise<Player | null>
   listMatches: (query: MatchQuery) => Promise<Match[]>
   ratingSeries: (query: RatingQuery) => Promise<RatingPoint[]>
+  dashboardList: () => Promise<PlayerDashboard[]>
   syncStart: () => Promise<SyncStartResult>
   syncStop: () => Promise<void>
   syncStatus: () => Promise<SyncStatus>
@@ -117,4 +140,5 @@ export interface IpcApi {
   setSetting: (key: string, value: string) => Promise<void>
   setAlwaysOnTop: (value: boolean) => void
   setOpacity: (value: number) => void
+  setWindowMode: (mode: 'mini' | 'pro') => void
 }
