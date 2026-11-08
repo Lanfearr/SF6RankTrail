@@ -1,0 +1,150 @@
+import type { Match, MatchResult } from '../../shared/types'
+
+type Json = Record<string, unknown>
+
+const isObject = (v: unknown): v is Json =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+const pick = (obj: Json, keys: string[]): unknown => {
+  for (const key of keys) {
+    if (key in obj && obj[key] !== undefined && obj[key] !== null) return obj[key]
+  }
+  return undefined
+}
+
+const asString = (v: unknown): string | null => {
+  if (typeof v === 'string' && v.length > 0) return v
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v)
+  return null
+}
+
+const asNumber = (v: unknown): number | null => {
+  if (typeof v === 'number' && Number.isFinite(v)) return Math.round(v)
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) {
+    return Math.round(Number(v))
+  }
+  return null
+}
+
+const asTime = (v: unknown): number | null => {
+  if (typeof v === 'number' && Number.isFinite(v)) {
+    return v < 10_000_000_000 ? Math.round(v * 1000) : Math.round(v)
+  }
+  if (typeof v === 'string') {
+    const parsed = Date.parse(v)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return null
+}
+
+const looksLikeBattle = (v: unknown): boolean => {
+  if (!isObject(v)) return false
+  const hasReplay = 'replay_id' in v || 'replayId' in v
+  const hasPlayers =
+    'player1_info' in v || 'player2_info' in v || 'player1' in v || 'player2' in v
+  return hasReplay && hasPlayers
+}
+
+export function findBattleLogArrays(data: unknown): unknown[][] {
+  const found: unknown[][] = []
+  const seen = new Set<unknown>()
+  const walk = (node: unknown): void => {
+    if (node === null || typeof node !== 'object' || seen.has(node)) return
+    seen.add(node)
+    if (Array.isArray(node)) {
+      if (node.some(looksLikeBattle)) found.push(node)
+      for (const item of node) walk(item)
+      return
+    }
+    for (const value of Object.values(node as Json)) walk(value)
+  }
+  walk(data)
+  return found
+}
+
+interface SideInfo {
+  raw: Json
+  shortId: string | null
+  character: string | null
+  masterRating: number | null
+  lp: number | null
+  roundResults: number[]
+}
+
+const readSide = (raw: unknown): SideInfo | null => {
+  if (!isObject(raw)) return null
+  const info = isObject(raw.info) ? raw.info : raw
+  const player = isObject(info.player)
+    ? info.player
+    : isObject(raw.player)
+      ? raw.player
+      : {}
+  const roundsRaw = pick(info, ['round_results', 'roundResults'])
+  const rounds = Array.isArray(roundsRaw)
+    ? roundsRaw.map((r) => (typeof r === 'number' ? r : Number(r))).filter(Number.isFinite)
+    : []
+  return {
+    raw: info,
+    shortId: asString(pick(player, ['short_id', 'shortId'])),
+    character: asString(pick(info, ['character_name', 'characterName', 'character'])),
+    masterRating: asNumber(pick(info, ['master_rating', 'masterRating'])),
+    lp: asNumber(pick(info, ['league_point', 'leaguePoint', 'lp'])),
+    roundResults: rounds
+  }
+}
+
+const outcomeFor = (my: SideInfo, opp: SideInfo): MatchResult => {
+  const myLosses = my.roundResults.filter((r) => r === 0).length
+  const oppLosses = opp.roundResults.filter((r) => r === 0).length
+  if (myLosses >= 2 && oppLosses < 2) return 'loss'
+  if (oppLosses >= 2 && myLosses < 2) return 'win'
+  return 'draw'
+}
+
+export function normalizeMatch(raw: unknown, ownerShortId: string): Match | null {
+  if (!isObject(raw)) return null
+  const replayId = asString(pick(raw, ['replay_id', 'replayId']))
+  if (!replayId) return null
+
+  const side1 = readSide(pick(raw, ['player1_info', 'player1Info', 'player1']))
+  const side2 = readSide(pick(raw, ['player2_info', 'player2Info', 'player2']))
+  if (!side1 || !side2) return null
+
+  const ownerIsP1 = side1.shortId === ownerShortId
+  const ownerIsP2 = side2.shortId === ownerShortId
+  const me = ownerIsP1 || !ownerIsP2 ? side1 : side2
+  const opp = me === side1 ? side2 : side1
+
+  const playedAt = asTime(
+    pick(raw, ['played_at', 'playedAt', 'battle_at', 'battleAt', 'replay_battle_at', 'time'])
+  )
+
+  return {
+    replayId,
+    shortId: ownerShortId,
+    opponentId: opp.shortId,
+    myChar: me.character,
+    oppChar: opp.character,
+    result: outcomeFor(me, opp),
+    myMr: me.masterRating,
+    oppMr: opp.masterRating,
+    myLp: me.lp,
+    playedAt: playedAt ?? Date.now(),
+    season: asString(pick(raw, ['season', 'season_id', 'seasonId'])),
+    createdAt: Date.now()
+  }
+}
+
+export function parseBattleLog(data: unknown, ownerShortId: string): Match[] {
+  const arrays = findBattleLogArrays(data)
+  const matches: Match[] = []
+  for (const array of arrays) {
+    for (const item of array) {
+      const match = normalizeMatch(item, ownerShortId)
+      if (match) matches.push(match)
+    }
+  }
+  const dedup = new Map<string, Match>()
+  for (const match of matches) dedup.set(match.replayId, match)
+  return [...dedup.values()]
+}

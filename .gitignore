@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+*.log
+*.db
+*.db-shm
+*.db-wal
+storage.json
+.DS_Store
+spike/out/
+.env
