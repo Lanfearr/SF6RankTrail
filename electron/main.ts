@@ -1,13 +1,19 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { copyFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
+  ChartMode,
+  Diagnostics,
+  ExportResult,
   LoginResult,
+  Match,
   MatchQuery,
   PlayerInput,
   RatingQuery,
   SyncStartResult,
   SyncStatus
 } from '../shared/types'
+import type { Db } from './db/migrate'
 import { openDatabase } from './db/migrate'
 import { Repository } from './db/repository'
 import {
@@ -23,9 +29,14 @@ import { OverlayServer } from './server/overlay-server'
 
 const OVERLAY_PORT = 8765
 const SYNC_INTERVAL_MS = 20_000
+const MINI_SIZE = { width: 440, height: 340 }
+const PRO_SIZE = { width: 960, height: 660 }
 
 let mainWindow: BrowserWindow | null = null
+let chartWindow: BrowserWindow | null = null
 let repo: Repository
+let database: Db
+let dbPath = ''
 let hub: RealtimeHub
 let overlay: OverlayServer
 let syncService: SyncService | null = null
@@ -33,7 +44,10 @@ let source: ElectronBucklerSource | null = null
 let sessionPath = ''
 let profileDir = ''
 let loginInFlight = false
+let quitting = false
+let activeShortId: string | null = null
 let syncStatus: SyncStatus = { state: 'idle', at: Date.now() }
+const statusHistory: SyncStatus[] = []
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) {
@@ -49,19 +63,84 @@ if (!hasSingleInstanceLock) {
 
 function setStatus(status: SyncStatus): void {
   syncStatus = status
+  statusHistory.unshift(status)
+  statusHistory.splice(20)
   hub?.broadcast({ type: 'sync:status', payload: status })
 }
 
-function createWindow(): void {
+function resolveActiveShortId(): string | null {
+  const players = repo.listPlayers()
+  if (activeShortId && players.some((player) => player.shortId === activeShortId)) {
+    return activeShortId
+  }
+  activeShortId = players.find((player) => player.isSelf)?.shortId ?? players[0]?.shortId ?? null
+  return activeShortId
+}
+
+function broadcastActivePlayer(): void {
+  const shortId = resolveActiveShortId()
+  if (shortId) repo.setSetting('activeShortId', shortId)
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('active:changed', shortId)
+  }
+}
+
+function loadRenderer(window: BrowserWindow, page: 'index.html' | 'chart.html'): void {
+  const devUrl = process.env['ELECTRON_RENDERER_URL']
+  if (devUrl) {
+    void window.loadURL(`${devUrl.replace(/\/$/, '')}/${page}`)
+  } else {
+    void window.loadFile(join(__dirname, '../renderer', page))
+  }
+}
+
+function readBounds(key: string, minWidth: number, minHeight: number): Electron.Rectangle | null {
+  const raw = repo.getSetting(key)
+  if (!raw) return null
+  try {
+    const value = JSON.parse(raw) as Partial<Electron.Rectangle>
+    if (
+      typeof value.x !== 'number' ||
+      typeof value.y !== 'number' ||
+      typeof value.width !== 'number' ||
+      typeof value.height !== 'number'
+    ) {
+      return null
+    }
+    return {
+      x: value.x,
+      y: value.y,
+      width: Math.max(minWidth, value.width),
+      height: Math.max(minHeight, value.height)
+    }
+  } catch {
+    return null
+  }
+}
+
+function saveBounds(key: string, window: BrowserWindow | null): void {
+  if (!repo || !window || window.isDestroyed()) return
+  repo.setSetting(key, JSON.stringify(window.getBounds()))
+}
+
+function mainBoundsKey(): string {
+  return 'mainBounds'
+}
+
+function chartBoundsKey(mode: ChartMode): string {
+  return mode === 'pro' ? 'chartProBounds' : 'chartMiniBounds'
+}
+
+function createMainWindow(): void {
+  const saved = readBounds(mainBoundsKey(), 920, 620)
   mainWindow = new BrowserWindow({
-    width: 440,
-    height: 340,
+    ...(saved ?? { width: 1080, height: 720 }),
+    minWidth: 920,
+    minHeight: 620,
     show: false,
-    frame: false,
-    transparent: true,
-    backgroundColor: '#00000000',
-    alwaysOnTop: true,
-    resizable: true,
+    frame: true,
+    backgroundColor: '#111116',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
@@ -70,13 +149,87 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+  mainWindow.on('close', () => saveBounds(mainBoundsKey(), mainWindow))
+  mainWindow.on('closed', () => {
+    mainWindow = null
+    if (!quitting) app.quit()
+  })
+  loadRenderer(mainWindow, 'index.html')
+}
 
-  const devUrl = process.env['ELECTRON_RENDERER_URL']
-  if (devUrl) {
-    void mainWindow.loadURL(devUrl)
-  } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+function chartMode(): ChartMode {
+  return repo.getSetting('chartMode') === 'pro' ? 'pro' : 'mini'
+}
+
+function chartAlwaysOnTop(mode = chartMode()): boolean {
+  const saved = repo.getSetting('chartAlwaysOnTop')
+  if (saved === '1') return true
+  if (saved === '0') return false
+  return mode === 'mini'
+}
+
+function chartOpacity(): number {
+  const raw = Number(repo.getSetting('chartOpacity') ?? '1')
+  return Number.isFinite(raw) ? Math.min(1, Math.max(0.2, raw)) : 1
+}
+
+function createChartWindow(): void {
+  if (chartWindow) {
+    chartWindow.show()
+    chartWindow.focus()
+    return
   }
+
+  const mode = chartMode()
+  const size = mode === 'pro' ? PRO_SIZE : MINI_SIZE
+  const saved = readBounds(chartBoundsKey(mode), 360, 300)
+  chartWindow = new BrowserWindow({
+    ...(saved ?? size),
+    minWidth: 360,
+    minHeight: 300,
+    show: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    alwaysOnTop: chartAlwaysOnTop(mode),
+    resizable: true,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true
+    }
+  })
+
+  chartWindow.setOpacity(chartOpacity())
+  chartWindow.on('ready-to-show', () => chartWindow?.show())
+  chartWindow.on('close', () => {
+    if (!quitting) saveBounds(chartBoundsKey(chartMode()), chartWindow)
+  })
+  chartWindow.on('closed', () => {
+    chartWindow = null
+  })
+  loadRenderer(chartWindow, 'chart.html')
+}
+
+function applyChartMode(mode: ChartMode): void {
+  const previousMode = chartMode()
+  saveBounds(chartBoundsKey(previousMode), chartWindow)
+  repo.setSetting('chartMode', mode)
+  if (!chartWindow) return
+  const alwaysOnTop = chartAlwaysOnTop(mode)
+  chartWindow.setAlwaysOnTop(alwaysOnTop)
+  const saved = readBounds(chartBoundsKey(mode), 360, 300)
+  if (saved) {
+    chartWindow.setBounds(saved)
+  } else {
+    chartWindow.setSize(
+      mode === 'pro' ? PRO_SIZE.width : MINI_SIZE.width,
+      mode === 'pro' ? PRO_SIZE.height : MINI_SIZE.height
+    )
+    chartWindow.center()
+  }
+  chartWindow.webContents.send('chart:mode', mode)
+  chartWindow.webContents.send('chart:alwaysOnTop', alwaysOnTop)
 }
 
 function trackedShortIds(): string[] {
@@ -137,6 +290,7 @@ async function runLogin(input: PlayerInput): Promise<void> {
     }
 
     repo.upsertPlayer({ shortId, cfn: input.cfn ?? shortId, isSelf: true })
+    broadcastActivePlayer()
     setStatus({ state: 'idle', at: Date.now(), message: `登录成功：${shortId}` })
     startSync()
   } catch (error) {
@@ -147,6 +301,77 @@ async function runLogin(input: PlayerInput): Promise<void> {
     })
   } finally {
     loginInFlight = false
+  }
+}
+
+async function chooseSavePath(
+  defaultName: string,
+  filters: Electron.FileFilter[]
+): Promise<string | null> {
+  const options: Electron.SaveDialogOptions = {
+    defaultPath: join(app.getPath('documents'), defaultName),
+    filters
+  }
+  const parent = BrowserWindow.getFocusedWindow() ?? mainWindow
+  const result = parent
+    ? await dialog.showSaveDialog(parent, options)
+    : await dialog.showSaveDialog(options)
+  return result.canceled || !result.filePath ? null : result.filePath
+}
+
+function csvCell(value: unknown): string {
+  const text = value === null || value === undefined ? '' : String(value)
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+function matchesCsv(matches: Match[]): string {
+  const header = [
+    'replay_id',
+    'played_at',
+    'played_at_iso',
+    'my_char',
+    'opp_char',
+    'result',
+    'my_mr',
+    'opp_mr',
+    'my_lp',
+    'season'
+  ]
+  const rows = matches.map((match) =>
+    [
+      match.replayId,
+      match.playedAt,
+      new Date(match.playedAt).toISOString(),
+      match.myChar,
+      match.oppChar,
+      match.result,
+      match.myMr,
+      match.oppMr,
+      match.myLp,
+      match.season
+    ]
+      .map(csvCell)
+      .join(',')
+  )
+  return `\uFEFF${header.join(',')}\r\n${rows.join('\r\n')}\r\n`
+}
+
+function getDiagnostics(shortId: string): Diagnostics {
+  const latest = repo.listMatches({ shortId, limit: 1 })[0]
+  const session = repo.getActiveSession(shortId)
+  return {
+    shortId,
+    loggedIn: hasSavedSession(sessionPath),
+    counts: {
+      players: repo.listPlayers().length,
+      matches: repo.countMatches(shortId),
+      ratingPoints: repo.countRatingPoints(shortId),
+      sessions: repo.listSessions(shortId).length
+    },
+    lastSynced: repo.listPlayers().find((player) => player.shortId === shortId)?.lastSynced ?? null,
+    latestMatchAt: latest?.playedAt ?? null,
+    sessionStartedAt: session?.startedAt ?? null,
+    recentStatuses: statusHistory
   }
 }
 
@@ -171,6 +396,7 @@ function registerIpc(): void {
       cfn: input.cfn,
       displayName: input.displayName
     })
+    broadcastActivePlayer()
     if (syncService?.isRunning() && hasSavedSession(sessionPath)) {
       startSync()
     }
@@ -179,6 +405,7 @@ function registerIpc(): void {
 
   ipcMain.handle('players:remove', async (_event, shortId: string) => {
     const removed = repo.deletePlayer(shortId)
+    broadcastActivePlayer()
     if (repo.listPlayers().length === 0) {
       await stopSync()
       setStatus({ state: 'idle', at: Date.now(), message: '没有追踪账号' })
@@ -190,9 +417,22 @@ function registerIpc(): void {
 
   ipcMain.handle('matches:list', async (_event, query: MatchQuery) => repo.listMatches(query))
 
+  ipcMain.handle('matches:page', async (_event, query: MatchQuery) => ({
+    matches: repo.listMatches(query),
+    total: repo.countMatches(query)
+  }))
+
   ipcMain.handle('ratings:series', async (_event, query: RatingQuery) => repo.listRatings(query))
 
   ipcMain.handle('dashboard:list', async () => repo.listDashboards())
+
+  ipcMain.handle('stats:characters', async (_event, shortId: string) =>
+    repo.getCharacterStats(shortId)
+  )
+
+  ipcMain.handle('stats:seasons', async (_event, shortId: string) => repo.getSeasonReport(shortId))
+
+  ipcMain.handle('diagnostics:get', async (_event, shortId: string) => getDiagnostics(shortId))
 
   ipcMain.handle('session:refresh', async (_event, shortId: string) => {
     if (!repo.listPlayers().some((player) => player.shortId === shortId)) return null
@@ -222,26 +462,89 @@ function registerIpc(): void {
     }
   })
 
-  ipcMain.on('window:setAlwaysOnTop', (_event, value: boolean) => {
-    mainWindow?.setAlwaysOnTop(Boolean(value))
-  })
-
-  ipcMain.on('window:setOpacity', (_event, value: number) => {
-    if (!mainWindow) return
-    const clamped = Math.min(1, Math.max(0.2, Number(value)))
-    mainWindow.setOpacity(clamped)
-  })
-
-  ipcMain.on('window:setMode', (_event, mode: 'mini' | 'pro') => {
-    if (!mainWindow) return
-    if (mode === 'pro') {
-      mainWindow.setAlwaysOnTop(false)
-      mainWindow.setSize(960, 660)
-    } else {
-      mainWindow.setAlwaysOnTop(true)
-      mainWindow.setSize(440, 340)
+  ipcMain.handle('export:matchesCsv', async (_event, shortId: string): Promise<ExportResult> => {
+    try {
+      const filePath = await chooseSavePath(`sf6-matches-${shortId}.csv`, [
+        { name: 'CSV', extensions: ['csv'] }
+      ])
+      if (!filePath) return { ok: false, message: '已取消' }
+      const matches = repo.listMatches({ shortId, limit: 1_000_000 })
+      writeFileSync(filePath, matchesCsv(matches), 'utf8')
+      return { ok: true, path: filePath }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
     }
-    mainWindow.center()
+  })
+
+  ipcMain.handle('export:dataJson', async (_event, shortId: string): Promise<ExportResult> => {
+    try {
+      const filePath = await chooseSavePath(`sf6-data-${shortId}.json`, [
+        { name: 'JSON', extensions: ['json'] }
+      ])
+      if (!filePath) return { ok: false, message: '已取消' }
+      const player = repo.listPlayers().find((entry) => entry.shortId === shortId) ?? null
+      const payload = {
+        exportedAt: Date.now(),
+        player,
+        matches: repo.listMatches({ shortId, limit: 1_000_000 }),
+        ratings: {
+          MR: repo.listRatings({ shortId, kind: 'MR' }),
+          LP: repo.listRatings({ shortId, kind: 'LP' })
+        },
+        sessions: repo.listSessions(shortId)
+      }
+      writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf8')
+      return { ok: true, path: filePath }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('export:database', async (): Promise<ExportResult> => {
+    try {
+      const stamp = new Date().toISOString().slice(0, 10)
+      const filePath = await chooseSavePath(`sf6scorer-backup-${stamp}.db`, [
+        { name: 'SQLite', extensions: ['db'] }
+      ])
+      if (!filePath) return { ok: false, message: '已取消' }
+      database.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+      copyFileSync(dbPath, filePath)
+      return { ok: true, path: filePath }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('active:get', async () => resolveActiveShortId())
+
+  ipcMain.handle('active:set', async (_event, shortId: string) => {
+    if (!repo.listPlayers().some((player) => player.shortId === shortId)) return
+    activeShortId = shortId
+    repo.setSetting('activeShortId', shortId)
+    broadcastActivePlayer()
+  })
+
+  ipcMain.on('chart:open', () => createChartWindow())
+
+  ipcMain.on('chart:close', () => {
+    chartWindow?.close()
+  })
+
+  ipcMain.on('chart:setMode', (_event, mode: ChartMode) => {
+    applyChartMode(mode === 'pro' ? 'pro' : 'mini')
+  })
+
+  ipcMain.on('chart:setAlwaysOnTop', (_event, value: boolean) => {
+    const enabled = Boolean(value)
+    repo.setSetting('chartAlwaysOnTop', enabled ? '1' : '0')
+    chartWindow?.setAlwaysOnTop(enabled)
+    chartWindow?.webContents.send('chart:alwaysOnTop', enabled)
+  })
+
+  ipcMain.on('chart:setOpacity', (_event, value: number) => {
+    const clamped = Math.min(1, Math.max(0.2, Number(value)))
+    repo.setSetting('chartOpacity', String(clamped))
+    chartWindow?.setOpacity(clamped)
   })
 }
 
@@ -249,8 +552,11 @@ app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
   sessionPath = join(app.getPath('userData'), 'session.json')
   profileDir = join(app.getPath('userData'), 'chrome-profile')
-  const db = openDatabase(join(app.getPath('userData'), 'sf6scorer.db'))
-  repo = new Repository(db)
+  dbPath = join(app.getPath('userData'), 'sf6scorer.db')
+  database = openDatabase(dbPath)
+  repo = new Repository(database)
+  activeShortId = repo.getSetting('activeShortId')
+  resolveActiveShortId()
   hub = new RealtimeHub()
   overlay = new OverlayServer(OVERLAY_PORT)
 
@@ -269,7 +575,7 @@ app.whenReady().then(async () => {
   }
 
   registerIpc()
-  createWindow()
+  createMainWindow()
 
   if (hasSavedSession(sessionPath) && repo.listPlayers().length > 0) {
     const result = startSync()
@@ -279,7 +585,7 @@ app.whenReady().then(async () => {
   }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (!mainWindow) createMainWindow()
   })
 })
 
@@ -288,9 +594,20 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  if (quitting) return
+  quitting = true
+  if (repo) {
+    saveBounds(mainBoundsKey(), mainWindow)
+    saveBounds(chartBoundsKey(chartMode()), chartWindow)
+  }
   syncService?.stop()
   void source?.close()
   void closeActiveLogin()
   hub?.close()
   overlay?.stop()
+  try {
+    database?.close()
+  } catch {
+    // ignore shutdown close errors
+  }
 })

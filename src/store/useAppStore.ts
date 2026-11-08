@@ -28,7 +28,8 @@ interface AppStore {
   applyEvent: (event: ServerEvent) => void
   setPlayers: (players: Player[]) => void
   setDashboards: (dashboards: PlayerDashboard[]) => void
-  setActive: (shortId: string | null) => void
+  setActive: (shortId: string) => void
+  setActiveLocal: (shortId: string | null) => void
   setSync: (sync: SyncStatus) => void
   clearWarning: () => void
 }
@@ -56,19 +57,23 @@ export const useAppStore = create<AppStore>((set, get) => ({
   warning: null,
 
   refresh: async () => {
-    const [players, dashboards, sync] = await Promise.all([
+    const [players, dashboards, sync, active] = await Promise.all([
       window.api.listPlayers(),
       window.api.dashboardList(),
-      window.api.syncStatus()
+      window.api.syncStatus(),
+      window.api.getActivePlayer()
     ])
     set((state) => ({
       players,
       dashboards,
       sync,
       activeShortId:
-        state.activeShortId && players.some((player) => player.shortId === state.activeShortId)
-          ? state.activeShortId
-          : pickActive(players)
+        active && players.some((player) => player.shortId === active)
+          ? active
+          : state.activeShortId &&
+              players.some((player) => player.shortId === state.activeShortId)
+            ? state.activeShortId
+            : pickActive(players)
     }))
   },
 
@@ -188,7 +193,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
           : pickActive(players)
     })),
   setDashboards: (dashboards) => set({ dashboards }),
-  setActive: (activeShortId) => set({ activeShortId }),
+  setActive: (activeShortId) => {
+    set({ activeShortId })
+    void window.api.setActivePlayer(activeShortId)
+  },
+  setActiveLocal: (activeShortId) => set({ activeShortId }),
   setSync: (sync) => set({ sync }),
   clearWarning: () => set({ warning: null })
 }))

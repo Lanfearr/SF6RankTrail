@@ -12,8 +12,8 @@
 
 做一个 Windows 桌面应用，准实时追踪《街霸6》玩家（自己或任意 CFN ID）的排位分数变化，并提供：
 
-- Mini 悬浮窗：当前 LP/MR、本场胜负、本会话累计变化、胜率
-- Pro 面板：按场次的 LP/MR 趋势图、按角色过滤、对局列表联动
+- 主窗口：概览、对战记录/详情、角色统计、赛季报告、导出/备份、同步诊断、设置
+- 图表弹窗：Mini 分数悬浮窗 / Pro 趋势图（最近 20 场），按需打开
 - OBS 直播叠加：透明置顶窗或浏览器源 overlay
 - 多账号追踪：自己 + 任意 CFN ID
 
@@ -86,7 +86,12 @@
                                 │ IPC / WebSocket
         ┌───────────────────────┴───────────────────────┐
         ▼                                               ▼
-  React 渲染进程 (Mini / Pro / Settings)          OBS 浏览器源 (/overlay)
+  主窗口 React 渲染进程                          图表弹窗 React 渲染进程
+  (概览/记录/统计/设置等)                        (Mini / Pro 最近 20 场)
+        │                                               │
+        └───────────────────────┬───────────────────────┘
+                                ▼
+                         OBS 浏览器源 (/overlay)
 ```
 
 ### 3.1 数据流
@@ -125,16 +130,16 @@ SF6scorer/
 │  │  └─ realtime-hub.ts
 │  └─ windows/
 ├─ src/                         # 渲染进程
-│  ├─ main.tsx
-│  ├─ App.tsx
-│  ├─ views/
-│  │  ├─ Mini/
-│  │  ├─ Pro/
-│  │  └─ Settings/
+│  ├─ main.tsx                  # 主窗口入口
+│  ├─ App.tsx                   # 主窗口壳与页面导航
+│  ├─ chart.tsx                 # 图表弹窗入口
+│  ├─ ChartApp.tsx              # 图表弹窗 Mini/Pro
+│  ├─ pages/                    # 概览/对战/角色/赛季/导出/诊断/设置
+│  ├─ views/                    # 图表专用 MiniView / ProView
+│  ├─ lib/                      # 实时连接、分数增量
 │  ├─ components/
 │  ├─ store/                    # zustand
-│  ├─ overlay/                  # OBS 页面
-│  └─ styles/
+│  └─ styles.css
 ├─ shared/
 │  ├─ types.ts                  # 主/渲染共享类型与协议
 │  └─ env.d.ts                  # ?raw 与 vite 类型声明
@@ -311,12 +316,23 @@ CREATE TABLE IF NOT EXISTS settings (
 | `players:list`                  | invoke | → `Player[]`                  |
 | `players:add`                   | invoke | `{ cfn, displayName? }`       |
 | `players:remove`                | invoke | `shortId`                     |
-| `matches:list`                  | invoke | `{ shortId, limit, offset }`  |
+| `matches:list`                  | invoke | `MatchQuery`                  |
+| `matches:page`                  | invoke | `MatchQuery` → `MatchPage`    |
 | `ratings:series`                | invoke | `{ shortId, kind, from, to }` |
+| `stats:characters`              | invoke | `shortId` → `CharacterStat[]` |
+| `stats:seasons`                 | invoke | `shortId` → `SeasonStat[]`    |
+| `diagnostics:get`               | invoke | `shortId` → `Diagnostics`     |
 | `session:refresh`               | invoke | `shortId` → `SessionSummary`  |
 | `settings:get` / `settings:set` | invoke | `{ key, value }`              |
-| `window:setAlwaysOnTop`         | send   | `boolean`                     |
-| `window:setOpacity`             | send   | `number`                      |
+| `export:matchesCsv`             | invoke | `shortId` → `ExportResult`    |
+| `export:dataJson`               | invoke | `shortId` → `ExportResult`    |
+| `export:database`               | invoke | → `ExportResult`              |
+| `active:get` / `active:set`     | invoke | → `shortId` / `shortId`       |
+| `active:changed`                | event  | `shortId`                     |
+| `chart:open` / `chart:close`    | send   | —                             |
+| `chart:setMode`                 | send   | `mini \| pro`                 |
+| `chart:setAlwaysOnTop`          | send   | `boolean`                     |
+| `chart:setOpacity`              | send   | `number`                      |
 
 ### 7.2 WebSocket 事件（主 → 渲染 / overlay）
 
@@ -338,25 +354,29 @@ type ServerEvent =
 
 ## 8. UI 规格
 
-### 8.1 Mini 模式
+### 8.1 主窗口
 
-- 显示：当前 LP/MR、本场 ±、本会话累计 ±、胜负、胜率
-- MR/LP 手动切换，记忆在 `settings.miniKind`
-- 刷新按钮：重置手动会话；同步运行中时立即触发一次同步
-- 角色为 Master 显示 MR，否则显示 LP（自动切换）
-- 数字滚动动画；数据时间角标
-- 记忆位置/尺寸/透明度
+- 启动只打开主窗口（标准不透明窗口，约 1080×720），关闭主窗口退出应用
+- 顶栏：当前账号选择、同步状态、打开图表弹窗
+- 页面顺序：概览、对战记录、对战详情、角色统计、赛季报告、数据导出/备份、数据同步、设置（最后一项）
+- 概览：当前 MR/LP、本会话净上分、胜率、同步状态、最近对局
+- 对战记录：按 MR/LP、结果、角色、日期筛选并分页；点击进入对战详情
+- 对战详情：双方角色、赛前分数、单场变化、对手分数、时间/赛季/replay_id
+- 角色统计：各角色对局数、胜负、胜率、当前 MR/LP、最后对局
+- 赛季报告：按 season 或月份汇总对局、胜率、MR/LP 范围
+- 数据导出/备份：CSV、完整 JSON、SQLite 数据库备份
+- 数据同步：登录状态、数据量、最近同步/对局、状态历史
+- 设置：账号增删、登录、同步间隔、图表默认模式/置顶/透明度、OBS 地址
 
-### 8.2 Pro 模式
+### 8.2 图表弹窗
 
-- 顶部大字显示本次会话净上分，并展示会话场次、胜/负；刷新按钮重置手动会话
-- ECharts 折线：横轴为场次（每场一个评分点），日期标签只在每天首场显示一次；LP/MR 切换
-- 支持缩放、框选、拖拽平移、回到总览
-- 按角色过滤；对局列表与可见时间范围联动
-- 对局列表显示对手圆形角色图标：胜绿框、负红框、平黄框；图标底部居中显示单场 ± 分，颜色与边框一致
-- 默认选中最近使用的角色；选择「全部角色」时每个角色一条折线
-- 图表缩放后相邻点位间距足够时，在对应赛后数据点（同角色下一场赛前分数或当前快照）显示对手圆形图标，并在图标上方显示该场单场 ± 分
-- 胜率统计
+- 与主窗口独立，按需打开；关闭图表窗口仅隐藏，不影响主窗口
+- Mini：当前 LP/MR、本会话累计 ±、胜负、胜率；MR/LP 手动切换并记忆在 `settings.miniKind`；刷新按钮重置手动会话
+- Pro：顶部大字本次会话净上分，ECharts 折线仅展示**最近 20 场比赛**；支持 MR/LP 切换、角色过滤、缩放/拖拽
+- Pro 横轴为场次，日期标签只在每天首场显示一次；默认选中最近使用的角色；全部角色时每个角色一条折线
+- 图表图标位于对应赛后数据点（同角色下一场赛前分数或当前快照），图标显示对手角色与单场 ± 分；胜绿、负红、平黄
+- 同步/刷新导致数据更新时保留当前 dataZoom 缩放范围
+- 图表窗口不包含账号切换、登录/同步控制、设置或对战列表
 
 ### 8.3 OBS
 
@@ -366,8 +386,10 @@ type ServerEvent =
 
 ### 8.4 窗口能力
 
-- 无边框、透明、可拖拽、置顶开关
-- 单实例锁；关闭到托盘（可选）
+- 主窗口：标准边框、不透明，启动默认打开
+- 图表窗口：无边框、透明、可拖拽；Mini 默认置顶，Pro 默认不置顶；位置/尺寸/置顶/透明度可记忆
+- 主窗口与图表窗口共享当前账号；主窗口切换账号后图表自动跟随
+- 单实例锁；关闭主窗口退出，关闭图表窗口仅隐藏
 
 ---
 
@@ -419,7 +441,7 @@ type ServerEvent =
 npm run spike:selftest
 npm run spike:dbtest
 npm run spike:m1test
-npm run spike:uitest   # 启动 Electron，校验 Mini/Pro 切换与 overlay 页
+npm run spike:uitest   # 校验主窗口页面、图表弹窗、最近 20 场、账号联动与 overlay
 
 # 2) 环境连通性自检（Electron 网络栈，无窗口）
 npm run spike:netcheck
@@ -496,7 +518,8 @@ npm run spike:m0 -- --short-id <Buckler_ID> --channel chrome --dump
 | 2026-11-08 | 全量场次/图表  | 首次同步分页回填全部可查询场次，后续增量；Pro 横轴按场次，日期标签每天一次；`spike:m1test` 覆盖回填批量事件                                                                                                    |
 | 2026-11-08 | 账号标签       | 账号显示昵称/shortId；添加时可选昵称；Pro 标签右上角删除并级联清理；采集自动补全昵称；`spike:uitest` 使用临时 userData 验证增删标签                                                                          |
 | 2026-11-08 | 手动会话/图标  | Mini MR/LP 手动切换与刷新；Pro 大字本次会话净上分；32 个角色图标与单场 ± badge；`session_marks` 手动会话基线；`spike:uitest` 覆盖 LP、图标、刷新  |
-| 2026-11-09 | 分数系统修正   | 对战记录明确为赛前分数；资料页当前 MR/LP 写入 snapshot；单场增减归属上一场，最新场用当前快照；最新自动/手动会话使用当前分数；图表图标后移至赛后数据点并显示单场 ±；自测覆盖当前快照与 UI badge |
+| 2026-11-09 | 分数系统修正   | 对战记录明确为赛前分数；资料页当前 MR/LP 写入 snapshot；单场增减归属上一场，最新场用当前快照；最新自动/手动会话使用当前分数；图表图标后移至赛后数据点并显示单场 ±；同步刷新保留图表缩放；自测覆盖当前快照、UI badge 与缩放保持 |
+| 2026-11-09 | 主窗口/图表拆分 | 启动只开主窗口；图表改为独立 Mini/Pro 弹窗，Pro 固定最近 20 场；主窗口新增概览、对战记录/详情、角色统计、赛季报告、导出/备份、同步诊断、设置；账号在两窗联动；`spike:uitest` 覆盖页面、双窗口、最近 20 场与缩放保持 |
 
 ---
 
@@ -505,4 +528,4 @@ npm run spike:m0 -- --short-id <Buckler_ID> --channel chrome --dump
 - [ ] 是否需要开机自启 / 托盘常驻
 - [ ] 是否接入自动更新服务器（GitHub Releases 或自建）
 - [ ] 语言：仅中文，还是中英双语
-- [ ] 是否需要导出 CSV / 分享图
+- [ ] 是否需要分享图 / 赛季长图

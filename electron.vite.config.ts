@@ -30,7 +30,10 @@ export default defineConfig({
     plugins: [react()],
     build: {
       rollupOptions: {
-        input: { index: resolve(__dirname, 'src/index.html') }
+        input: {
+          index: resolve(__dirname, 'src/index.html'),
+          chart: resolve(__dirname, 'src/chart.html')
+        }
       }
     }
   }

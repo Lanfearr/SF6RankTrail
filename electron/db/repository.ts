@@ -1,4 +1,5 @@
 import type {
+  CharacterStat,
   CurrentRating,
   Match,
   MatchQuery,
@@ -7,6 +8,7 @@ import type {
   RatingPoint,
   RatingQuery,
   RatingSnapshot,
+  SeasonStat,
   SessionSummary
 } from '../../shared/types'
 import type { Db } from './migrate'
@@ -222,14 +224,15 @@ export class Repository {
   }
 
   listMatches(query: MatchQuery): Match[] {
+    const { where, params } = matchFilter(query)
     const rows = this.db
       .prepare(
         `SELECT * FROM matches
-         WHERE short_id = ?
+         WHERE ${where}
          ORDER BY played_at DESC
          LIMIT ? OFFSET ?`
       )
-      .all(query.shortId, query.limit ?? 50, query.offset ?? 0) as unknown as MatchRow[]
+      .all(...params, query.limit ?? 50, query.offset ?? 0) as unknown as MatchRow[]
     return rows.map(toMatch)
   }
 
@@ -595,11 +598,115 @@ export class Repository {
       .filter((dashboard): dashboard is PlayerDashboard => dashboard !== null)
   }
 
-  countMatches(shortId: string): number {
+  countMatches(query: string | MatchQuery): number {
+    const filter = typeof query === 'string' ? { shortId: query } : query
+    const { where, params } = matchFilter(filter)
     const row = this.db
-      .prepare('SELECT COUNT(*) AS total FROM matches WHERE short_id = ?')
+      .prepare(`SELECT COUNT(*) AS total FROM matches WHERE ${where}`)
+      .get(...params) as { total: number } | undefined
+    return Number(row?.total ?? 0)
+  }
+
+  countRatingPoints(shortId: string): number {
+    const row = this.db
+      .prepare('SELECT COUNT(*) AS total FROM rating_points WHERE short_id = ?')
       .get(shortId) as { total: number } | undefined
     return Number(row?.total ?? 0)
+  }
+
+  getCharacterStats(shortId: string): CharacterStat[] {
+    const rows = this.db
+      .prepare(
+        `SELECT my_char AS character,
+                COUNT(*) AS matches,
+                SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) AS losses,
+                MAX(played_at) AS last_played_at
+         FROM matches
+         WHERE short_id = ? AND my_char IS NOT NULL
+         GROUP BY my_char
+         ORDER BY matches DESC, my_char ASC`
+      )
+      .all(shortId) as unknown as Array<{
+      character: string
+      matches: number
+      wins: number
+      losses: number
+      last_played_at: number
+    }>
+
+    return rows.map((row) => {
+      const matches = Number(row.matches)
+      const wins = Number(row.wins)
+      return {
+        character: row.character,
+        matches,
+        wins,
+        losses: Number(row.losses),
+        winRate: matches > 0 ? wins / matches : 0,
+        currentMr: this.getLatestRating(shortId, 'MR', row.character)?.value ?? null,
+        currentLp: this.getLatestRating(shortId, 'LP', row.character)?.value ?? null,
+        lastPlayedAt: row.last_played_at
+      }
+    })
+  }
+
+  getSeasonReport(shortId: string): SeasonStat[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM matches
+         WHERE short_id = ?
+         ORDER BY played_at ASC`
+      )
+      .all(shortId) as unknown as MatchRow[]
+
+    const groups = new Map<string, SeasonStat>()
+    for (const row of rows) {
+      const date = new Date(row.played_at)
+      const key = row.season
+        ? `season:${row.season}`
+        : `month:${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+      let group = groups.get(key)
+      if (!group) {
+        group = {
+          key,
+          label: row.season
+            ? `赛季 ${row.season}`
+            : `${date.getFullYear()} 年 ${date.getMonth() + 1} 月`,
+          season: row.season,
+          matches: 0,
+          wins: 0,
+          losses: 0,
+          winRate: 0,
+          firstPlayedAt: row.played_at,
+          lastPlayedAt: row.played_at,
+          startMr: null,
+          endMr: null,
+          startLp: null,
+          endLp: null
+        }
+        groups.set(key, group)
+      }
+      group.matches += 1
+      if (row.result === 'win') group.wins += 1
+      if (row.result === 'loss') group.losses += 1
+      group.lastPlayedAt = row.played_at
+      if (row.my_mr !== null) {
+        group.startMr ??= row.my_mr
+        group.endMr = row.my_mr
+      }
+      if (row.my_lp !== null) {
+        group.startLp ??= row.my_lp
+        group.endLp = row.my_lp
+      }
+    }
+
+    return [...groups.values()]
+      .map((group) => ({
+        ...group,
+        winRate: group.matches > 0 ? group.wins / group.matches : 0
+      }))
+      .sort((a, b) => b.firstPlayedAt - a.firstPlayedAt)
   }
 
   getSetting(key: string): string | null {
@@ -616,4 +723,28 @@ export class Repository {
       )
       .run(key, value)
   }
+}
+
+function matchFilter(query: MatchQuery): { where: string; params: Array<string | number> } {
+  const clauses = ['short_id = ?']
+  const params: Array<string | number> = [query.shortId]
+  if (query.character) {
+    clauses.push('my_char = ?')
+    params.push(query.character)
+  }
+  if (query.result) {
+    clauses.push('result = ?')
+    params.push(query.result)
+  }
+  if (query.kind === 'MR') clauses.push('my_mr IS NOT NULL')
+  if (query.kind === 'LP') clauses.push('my_lp IS NOT NULL')
+  if (query.from !== undefined) {
+    clauses.push('played_at >= ?')
+    params.push(query.from)
+  }
+  if (query.to !== undefined) {
+    clauses.push('played_at <= ?')
+    params.push(query.to)
+  }
+  return { where: clauses.join(' AND '), params }
 }

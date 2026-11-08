@@ -2,6 +2,7 @@ export type MatchResult = 'win' | 'loss' | 'draw'
 export type RatingKind = 'LP' | 'MR'
 export type RatingSource = 'battlelog' | 'snapshot' | 'manual'
 export type SyncState = 'idle' | 'syncing' | 'error'
+export type ChartMode = 'mini' | 'pro'
 
 export interface Player {
   shortId: string
@@ -123,6 +124,64 @@ export interface MatchQuery {
   shortId: string
   limit?: number
   offset?: number
+  character?: string | null
+  result?: MatchResult | null
+  kind?: RatingKind | null
+  from?: number
+  to?: number
+}
+
+export interface MatchPage {
+  matches: Match[]
+  total: number
+}
+
+export interface CharacterStat {
+  character: string
+  matches: number
+  wins: number
+  losses: number
+  winRate: number
+  currentMr: number | null
+  currentLp: number | null
+  lastPlayedAt: number | null
+}
+
+export interface SeasonStat {
+  key: string
+  label: string
+  season: string | null
+  matches: number
+  wins: number
+  losses: number
+  winRate: number
+  firstPlayedAt: number
+  lastPlayedAt: number
+  startMr: number | null
+  endMr: number | null
+  startLp: number | null
+  endLp: number | null
+}
+
+export interface Diagnostics {
+  shortId: string
+  loggedIn: boolean
+  counts: {
+    players: number
+    matches: number
+    ratingPoints: number
+    sessions: number
+  }
+  lastSynced: number | null
+  latestMatchAt: number | null
+  sessionStartedAt: number | null
+  recentStatuses: SyncStatus[]
+}
+
+export interface ExportResult {
+  ok: boolean
+  path?: string
+  message?: string
 }
 
 export interface RatingQuery {
@@ -139,15 +198,29 @@ export interface IpcApi {
   addPlayer: (input: PlayerInput) => Promise<Player | null>
   removePlayer: (shortId: string) => Promise<boolean>
   listMatches: (query: MatchQuery) => Promise<Match[]>
+  listMatchPage: (query: MatchQuery) => Promise<MatchPage>
   ratingSeries: (query: RatingQuery) => Promise<RatingPoint[]>
   dashboardList: () => Promise<PlayerDashboard[]>
+  characterStats: (shortId: string) => Promise<CharacterStat[]>
+  seasonReport: (shortId: string) => Promise<SeasonStat[]>
+  diagnostics: (shortId: string) => Promise<Diagnostics>
   refreshSession: (shortId: string) => Promise<SessionSummary | null>
   syncStart: () => Promise<SyncStartResult>
   syncStop: () => Promise<void>
   syncStatus: () => Promise<SyncStatus>
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
-  setAlwaysOnTop: (value: boolean) => void
-  setOpacity: (value: number) => void
-  setWindowMode: (mode: 'mini' | 'pro') => void
+  exportMatchesCsv: (shortId: string) => Promise<ExportResult>
+  exportDataJson: (shortId: string) => Promise<ExportResult>
+  backupDatabase: () => Promise<ExportResult>
+  openChart: () => void
+  closeChart: () => void
+  chartSetMode: (mode: ChartMode) => void
+  chartSetAlwaysOnTop: (value: boolean) => void
+  chartSetOpacity: (value: number) => void
+  getActivePlayer: () => Promise<string | null>
+  setActivePlayer: (shortId: string) => Promise<void>
+  onActivePlayerChanged: (listener: (shortId: string | null) => void) => () => void
+  onChartModeChanged: (listener: (mode: ChartMode) => void) => () => void
+  onChartAlwaysOnTopChanged: (listener: (value: boolean) => void) => () => void
 }

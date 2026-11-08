@@ -50,9 +50,31 @@ interface ZoomModel {
   getPercentRange?: () => number[]
 }
 
+const readZoomRange = (chart: ReturnType<typeof echarts.init>): [number, number] | null => {
+  const model = (
+    chart as unknown as {
+      getModel: () =>
+        | { getComponent: (name: string) => ZoomModel | ZoomModel[] | undefined }
+        | undefined
+    }
+  ).getModel()
+  if (!model) return null
+  const component = model.getComponent('dataZoom')
+  const components = Array.isArray(component) ? component : component ? [component] : []
+
+  for (const item of components) {
+    const range = item.getPercentRange?.()
+    if (!range || range.length < 2) continue
+    const start = Math.max(0, Math.min(100, range[0] ?? 0))
+    const end = Math.max(0, Math.min(100, range[1] ?? 100))
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) return [start, end]
+  }
+  return null
+}
+
 const GRID_LEFT = 56
 const GRID_RIGHT = 20
-const GRID_BOTTOM = 72
+const GRID_BOTTOM = 24
 const ICON_SPACING = 24
 
 const resultLabel = (result: MatchResult): string =>
@@ -148,6 +170,8 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
       emphasis: { focus: 'series' as const }
     }))
 
+    const [zoomStart, zoomEnd] = readZoomRange(chart) ?? [0, 100]
+
     const option: ChartOption = {
       backgroundColor: 'transparent',
       color: [
@@ -199,18 +223,16 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
         data: labels,
         axisLabel: {
           interval: 0,
-          rotate: 30,
-          margin: 10,
+          rotate: 0,
+          margin: 6,
           fontSize: 10,
-          color: '#9ca3af'
+          color: '#9ca3af',
+          hideOverlap: true
         },
         axisLine: { lineStyle: { color: '#555' } }
       },
       yAxis: { type: 'value', scale: true, name: kind },
-      dataZoom: [
-        { type: 'inside' },
-        { type: 'slider', height: 18, bottom: 14, borderColor: 'transparent' }
-      ],
+      dataZoom: [{ type: 'inside', start: zoomStart, end: zoomEnd }],
       series
     }
 
@@ -223,14 +245,7 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
         return
       }
 
-      const model = (
-        chart as unknown as {
-          getModel: () => { getComponent: (name: string) => ZoomModel | undefined }
-        }
-      ).getModel()
-      const range = model.getComponent('dataZoom')?.getPercentRange?.() ?? [0, 100]
-      const start = Math.max(0, Math.min(100, range[0] ?? 0))
-      const end = Math.max(0, Math.min(100, range[1] ?? 100))
+      const [start, end] = readZoomRange(chart) ?? [0, 100]
       const startIndex = (start / 100) * Math.max(0, points.length - 1)
       const endIndex = (end / 100) * Math.max(0, points.length - 1)
       const span = endIndex - startIndex

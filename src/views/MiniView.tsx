@@ -5,18 +5,12 @@ import { useAppStore } from '../store/useAppStore'
 
 export function MiniView() {
   const dashboards = useAppStore((state) => state.dashboards)
-  const players = useAppStore((state) => state.players)
   const activeShortId = useAppStore((state) => state.activeShortId)
-  const setActive = useAppStore((state) => state.setActive)
   const sync = useAppStore((state) => state.sync)
   const lastEvent = useAppStore((state) => state.lastEvent)
   const refreshSession = useAppStore((state) => state.refreshSession)
-  const login = useAppStore((state) => state.login)
-  const start = useAppStore((state) => state.start)
-  const stop = useAppStore((state) => state.stop)
 
   const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState('')
   const [kind, setKind] = useState<RatingKind | null>(null)
 
   const dashboard = useMemo(
@@ -31,23 +25,12 @@ export function MiniView() {
   const delta = session ? (activeKind === 'LP' ? session.lpDelta : session.ratingDelta) : null
   const winRate =
     session && session.matches > 0 ? Math.round((session.wins / session.matches) * 100) : null
-  const running = sync.state === 'syncing'
 
   useEffect(() => {
     void window.api.getSetting('miniKind').then((value) => {
       if (value === 'MR' || value === 'LP') setKind(value)
     })
   }, [])
-
-  const run = async (action: () => Promise<unknown>, label: string): Promise<void> => {
-    setBusy(true)
-    setMessage(label)
-    try {
-      await action()
-    } finally {
-      setBusy(false)
-    }
-  }
 
   const chooseKind = (next: RatingKind): void => {
     setKind(next)
@@ -60,30 +43,16 @@ export function MiniView() {
 
   return (
     <div className="mini">
-      {players.length > 1 && (
-        <div className="pills">
-          {players.map((player) => (
-            <button
-              key={player.shortId}
-              className={player.shortId === dashboard?.player.shortId ? 'pill active' : 'pill'}
-              onClick={() => setActive(player.shortId)}
-            >
-              {player.displayName ?? player.cfn ?? player.shortId}
-            </button>
-          ))}
-        </div>
-      )}
+      <div className="chart-account">
+        <span className="label">账号</span>
+        <span title={dashboard?.player.shortId}>
+          {dashboard?.player.displayName ?? dashboard?.player.cfn ?? dashboard?.player.shortId ?? '未选择'}
+        </span>
+      </div>
 
       {!dashboard ? (
         <div className="empty">
-          <p>尚未追踪账号</p>
-          <button
-            className="chip active"
-            disabled={busy}
-            onClick={() => void run(login, '正在打开登录窗口…')}
-          >
-            登录 CAPCOM ID
-          </button>
+          <p>请先在主窗口添加账号</p>
         </div>
       ) : (
         <>
@@ -128,42 +97,19 @@ export function MiniView() {
         <div className="actions">
           <button
             className="chip"
-            disabled={busy}
-            onClick={() => void run(login, '正在打开登录窗口…')}
-          >
-            登录
-          </button>
-          <button
-            className="chip"
             disabled={busy || !dashboard}
-            onClick={() =>
-              dashboard &&
-              void run(
-                () => refreshSession(dashboard.player.shortId),
-                '正在开始新的本次会话…'
-              )
-            }
+            onClick={() => {
+              if (!dashboard) return
+              setBusy(true)
+              void refreshSession(dashboard.player.shortId).finally(() => setBusy(false))
+            }}
           >
             刷新
-          </button>
-          <button
-            className="chip active"
-            disabled={busy || running}
-            onClick={() => void run(start, '同步启动中…')}
-          >
-            开始
-          </button>
-          <button
-            className="chip"
-            disabled={busy || !running}
-            onClick={() => void run(stop, '正在停止…')}
-          >
-            停止
           </button>
         </div>
       </div>
 
-      <div className="last-event">{message || lastEvent}</div>
+      <div className="last-event">{lastEvent}</div>
     </div>
   )
 }
