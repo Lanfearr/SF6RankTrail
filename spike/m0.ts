@@ -56,6 +56,7 @@ const selfTest = (): void => {
               player: { short_id: 'OTHER' },
               character_name: 'Ken',
               master_rating: 1750,
+              league_point: 11950,
               round_results: [0, 0]
             },
             played_at: '2026-11-08T10:00:00Z'
@@ -70,6 +71,8 @@ const selfTest = (): void => {
   const match = matches[0] as Match
   if (match.result !== 'win') throw new Error(`self-test failed: expected win, got ${match.result}`)
   if (match.myMr !== 1800) throw new Error(`self-test failed: expected MR 1800, got ${match.myMr}`)
+  if (match.oppLp !== 11950)
+    throw new Error(`self-test failed: expected opponent LP 11950, got ${match.oppLp}`)
   const pageInfo = readBattleLogPageInfo({
     props: { pageProps: { pagination: { total_pages: 3, current_page: 1 } } }
   })

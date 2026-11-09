@@ -225,6 +225,7 @@ export function normalizeMatch(raw: unknown, ownerShortId: string): Match | null
     myMr: me.masterRating,
     oppMr: opp.masterRating,
     myLp: me.lp,
+    oppLp: opp.lp,
     playedAt: playedAt ?? Date.now(),
     season: asString(pick(raw, ['season', 'season_id', 'seasonId'])),
     createdAt: Date.now()

@@ -23,6 +23,7 @@ export interface Match {
   myMr: number | null
   oppMr: number | null
   myLp: number | null
+  oppLp: number | null
   playedAt: number
   season: string | null
   createdAt: number
@@ -256,6 +257,7 @@ export interface IpcApi {
   syncStart: () => Promise<SyncStartResult>
   syncStop: () => Promise<void>
   syncStatus: () => Promise<SyncStatus>
+  getVersion: () => Promise<string>
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
   exportMatchesCsv: (shortId: string) => Promise<ExportResult>

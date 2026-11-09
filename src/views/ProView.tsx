@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Match, RatingKind, RatingPoint } from '@shared/types'
 import { TrendChart } from '../components/TrendChart'
-import { buildRatingDeltas } from '../lib/ratings'
+import { buildRatingDeltas, seriesKey } from '../lib/ratings'
 import { useAppStore } from '../store/useAppStore'
 
 const RECENT_MATCH_LIMIT = 20
@@ -72,6 +72,7 @@ export function ProView() {
     () => [
       ...new Set(
         windowPoints
+          .filter((point) => point.source === 'battlelog')
           .map((point) => point.character)
           .filter((value): value is string => Boolean(value))
       )
@@ -93,6 +94,34 @@ export function ProView() {
         : windowPoints.filter((point) => point.character === effectiveCharacter),
     [windowPoints, effectiveCharacter]
   )
+
+  const chartPoints = useMemo(() => {
+    const matchesBySeries = new Map<string, Match>()
+    for (const match of matches) {
+      matchesBySeries.set(seriesKey(match.myChar, match.playedAt), match)
+    }
+
+    const groups = new Map<string, RatingPoint[]>()
+    for (const point of filtered) {
+      const key = point.character ?? ''
+      const group = groups.get(key)
+      if (group) group.push(point)
+      else groups.set(key, [point])
+    }
+
+    const result: RatingPoint[] = []
+    for (const group of groups.values()) {
+      group.sort((a, b) => a.observedAt - b.observedAt || a.id - b.id)
+      group.forEach((point, index) => {
+        if (point.source !== 'battlelog') return
+        if (!matchesBySeries.has(seriesKey(point.character, point.observedAt))) return
+        const next = group[index + 1]
+        result.push(next ? { ...point, value: next.value } : point)
+      })
+    }
+
+    return result.sort((a, b) => a.observedAt - b.observedAt || a.id - b.id)
+  }, [filtered, matches])
 
   const stats = useMemo(() => {
     const values = filtered.map((point) => point.value)
@@ -196,7 +225,7 @@ export function ProView() {
 
         <section className="chart-column">
           <TrendChart
-            points={filtered}
+            points={chartPoints}
             kind={kind}
             matches={matches}
             deltas={ratingDeltas}

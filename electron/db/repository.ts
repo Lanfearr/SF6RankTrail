@@ -36,6 +36,7 @@ interface MatchRow {
   my_mr: number | null
   opp_mr: number | null
   my_lp: number | null
+  opp_lp: number | null
   played_at: number
   season: string | null
   created_at: number
@@ -88,7 +89,10 @@ interface RunResult {
   lastInsertRowid: number | bigint
 }
 
-const SESSION_GAP_MS = 3 * 60 * 60 * 1000
+const DEFAULT_SESSION_IDLE_MS = 3 * 60 * 60 * 1000
+const MIN_SESSION_IDLE_MS = 60_000
+const MAX_SESSION_IDLE_MS = 24 * 60 * 60 * 1000
+const SESSION_IDLE_SETTING_KEY = 'sessionIdleMs'
 
 const toPlayer = (row: PlayerRow): Player => ({
   shortId: row.short_id,
@@ -109,6 +113,7 @@ const toMatch = (row: MatchRow): Match => ({
   myMr: row.my_mr,
   oppMr: row.opp_mr,
   myLp: row.my_lp,
+  oppLp: row.opp_lp,
   playedAt: row.played_at,
   season: row.season,
   createdAt: row.created_at
@@ -202,8 +207,8 @@ export class Repository {
       .prepare(
         `INSERT OR IGNORE INTO matches
           (replay_id, short_id, opponent_id, my_char, opp_char, result,
-           my_mr, opp_mr, my_lp, played_at, season, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           my_mr, opp_mr, my_lp, opp_lp, played_at, season, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         match.replayId,
@@ -215,6 +220,7 @@ export class Repository {
         match.myMr,
         match.oppMr,
         match.myLp,
+        match.oppLp,
         match.playedAt,
         match.season,
         match.createdAt
@@ -439,12 +445,21 @@ export class Repository {
     return row?.played_at ?? null
   }
 
+  private getSessionIdleMs(): number {
+    const raw = this.getSetting(SESSION_IDLE_SETTING_KEY)
+    if (raw === null || raw.trim() === '') return DEFAULT_SESSION_IDLE_MS
+    const value = Number(raw)
+    if (!Number.isFinite(value)) return DEFAULT_SESSION_IDLE_MS
+    return Math.min(MAX_SESSION_IDLE_MS, Math.max(MIN_SESSION_IDLE_MS, Math.round(value)))
+  }
+
   rebuildSessions(shortId: string): void {
     const rows = this.db
       .prepare(
         'SELECT played_at, my_mr, my_lp FROM matches WHERE short_id = ? ORDER BY played_at ASC'
       )
       .all(shortId) as unknown as MatchTimeRow[]
+    const idleMs = this.getSessionIdleMs()
 
     this.db.exec('BEGIN')
     try {
@@ -479,7 +494,7 @@ export class Repository {
       }
 
       for (const row of rows) {
-        if (!current || row.played_at - current.end > SESSION_GAP_MS) {
+        if (!current || row.played_at - current.end > idleMs) {
           flush()
           current = {
             start: row.played_at,
@@ -582,6 +597,15 @@ export class Repository {
       .prepare('SELECT * FROM session_marks WHERE short_id = ?')
       .get(shortId) as SessionMarkRow | undefined
     if (!mark) return null
+
+    const latest = this.db
+      .prepare('SELECT MAX(played_at) AS played_at FROM matches WHERE short_id = ?')
+      .get(shortId) as { played_at: number | null } | undefined
+    const lastActivityAt = Math.max(mark.started_at, latest?.played_at ?? 0)
+    if (Date.now() - lastActivityAt >= this.getSessionIdleMs()) {
+      this.db.prepare('DELETE FROM session_marks WHERE short_id = ?').run(shortId)
+      return null
+    }
 
     const stats = this.db
       .prepare(

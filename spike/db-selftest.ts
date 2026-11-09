@@ -21,6 +21,7 @@ const match = {
   myMr: 1800,
   oppMr: 1750,
   myLp: null,
+  oppLp: 11000,
   playedAt: Date.now(),
   season: null,
   createdAt: Date.now()
@@ -28,6 +29,7 @@ const match = {
 console.log('insert match:', repo.insertMatch(match))
 console.log('insert duplicate (should be false):', repo.insertMatch(match))
 console.log('matches:', repo.listMatches({ shortId: 'SELF' }))
+assert.equal(repo.listMatches({ shortId: 'SELF' })[0]?.oppLp, 11000)
 
 const rating = repo.insertRating({
   shortId: 'SELF',
@@ -168,6 +170,7 @@ const importMatch: Match = {
   myMr: 1800,
   oppMr: 1790,
   myLp: null,
+  oppLp: null,
   playedAt: importStart,
   season: null,
   createdAt: importStart
@@ -209,6 +212,27 @@ assert.equal(repo.listMatches({ shortId: 'SELF' }).length, 0)
 assert.equal(repo.listRatings({ shortId: 'SELF', kind: 'MR' }).length, 0)
 assert.equal(repo.getManualSession('SELF'), null)
 assert.equal(repo.getSetting('backfill:SELF'), null)
+
+repo.upsertPlayer({ shortId: 'IDLE', cfn: 'Idle' })
+const idleAt = Date.now() - 4 * 60 * 60 * 1000
+repo.insertMatch({
+  ...match,
+  replayId: 'idle-1',
+  shortId: 'IDLE',
+  playedAt: idleAt,
+  createdAt: idleAt
+})
+repo.rebuildSessions('IDLE')
+db.prepare(
+  `INSERT INTO session_marks (short_id, started_at, start_mr, start_lp, updated_at)
+   VALUES (?, ?, ?, ?, ?)`
+).run('IDLE', idleAt - 60_000, 1800, null, idleAt)
+repo.setSetting('sessionIdleMs', String(5 * 60 * 60 * 1000))
+assert.equal(repo.getManualSession('IDLE')?.matches, 1)
+repo.setSetting('sessionIdleMs', String(3 * 60 * 60 * 1000))
+assert.equal(repo.getManualSession('IDLE'), null)
+assert.equal(repo.getActiveSession('IDLE')?.startedAt, idleAt)
+assert.equal(repo.deletePlayer('IDLE'), true)
 
 db.close()
 console.log('[db-selftest] OK')

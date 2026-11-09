@@ -811,6 +811,12 @@ body {
   font-size: 12px;
 }
 
+.app-version {
+  color: #71717a;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
 .main-content {
   flex: 1;
   min-width: 0;

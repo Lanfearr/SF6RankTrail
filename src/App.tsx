@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Match } from '@shared/types'
 import { useRealtime } from './lib/useRealtime'
 import { CharactersPage } from './pages/CharactersPage'
@@ -54,6 +54,11 @@ export default function App() {
 
   const [page, setPage] = useState<Page>('overview')
   const [selectedMatch, setSelectedMatch] = useState<Match | null>(null)
+  const [version, setVersion] = useState('')
+
+  useEffect(() => {
+    void window.api.getVersion().then(setVersion)
+  }, [])
 
   const openMatch = (match: Match): void => {
     setSelectedMatch(match)
@@ -143,6 +148,7 @@ export default function App() {
           <div className="nav-footer">
             <span className="muted small">最近事件</span>
             <span>{lastEvent}</span>
+            {version && <span className="app-version">v{version}</span>}
           </div>
         </nav>
         <main className="main-content">{renderPage()}</main>

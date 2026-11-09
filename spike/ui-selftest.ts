@@ -95,6 +95,7 @@ const main = async (): Promise<void> => {
       myMr: match.mr,
       oppMr: 1800,
       myLp: match.lp,
+      oppLp: 11950,
       playedAt: at,
       season: null,
       createdAt: at
@@ -176,6 +177,7 @@ const main = async (): Promise<void> => {
       myMr: mr,
       oppMr: 2000,
       myLp: lp,
+      oppLp: 12950,
       playedAt: at,
       season: null,
       createdAt: at
@@ -353,10 +355,16 @@ const main = async (): Promise<void> => {
       { timeout: 5_000 }
     )
     assert.equal(await chart.locator('.chart-wrap').getAttribute('data-series-count'), '1')
+    assert.equal(await chart.locator('.chart-wrap').getAttribute('data-point-count'), '2')
 
     await chart.selectOption('.toolbar select', 'all')
     await chart.waitForFunction(
       () => document.querySelector('.chart-wrap')?.getAttribute('data-series-count') === '3',
+      undefined,
+      { timeout: 5_000 }
+    )
+    await chart.waitForFunction(
+      () => document.querySelector('.chart-wrap')?.getAttribute('data-point-count') === '5',
       undefined,
       { timeout: 5_000 }
     )
@@ -372,8 +380,9 @@ const main = async (): Promise<void> => {
     )
     assert.equal(
       await chart.locator('.chart-delta').allTextContents().then((items) => items.join(',')),
-      '+10,+15,-25,-20,+20'
+      '+10,-20,+15,-25,+20'
     )
+    assert.equal(await chart.locator('.chart-hint').count(), 0)
     const firstIconSrc = await chart.locator('.chart-icon img').first().getAttribute('src')
     const lastIconSrc = await chart.locator('.chart-icon img').last().getAttribute('src')
     assert.equal(Boolean(firstIconSrc?.includes('characters/ken.png')), true)
@@ -458,6 +467,10 @@ const main = async (): Promise<void> => {
     )
     assert.equal(
       await chart.locator('.chart-wrap').getAttribute('data-delta-count'),
+      '20'
+    )
+    assert.equal(
+      await chart.locator('.chart-wrap').getAttribute('data-point-count'),
       '20'
     )
     const statsText = (await chart.textContent('.stats-inline')) ?? ''

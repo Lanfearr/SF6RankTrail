@@ -63,7 +63,11 @@ export function MatchDetailPage({ shortId, selectedMatch }: Props) {
   const deltas = useMemo(() => buildRatingDeltas(series[kind]), [series, kind])
   const delta = current ? (deltas.get(current.playedAt) ?? null) : null
   const rating = current ? (kind === 'MR' ? current.myMr : current.myLp) : null
-  const opponentRating = current && kind === 'MR' ? current.oppMr : null
+  const opponentRating = current
+    ? kind === 'MR'
+      ? current.oppMr
+      : current.oppLp
+    : null
 
   return (
     <div className="page">

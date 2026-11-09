@@ -16,6 +16,7 @@ export function openDatabase(file: string): Db {
   db.exec('PRAGMA foreign_keys = ON;')
   db.exec(schema)
 
+  ensureColumn(db, 'matches', 'opp_lp', 'opp_lp INTEGER')
   ensureColumn(db, 'sessions', 'start_lp', 'start_lp INTEGER')
   ensureColumn(db, 'sessions', 'end_lp', 'end_lp INTEGER')
 

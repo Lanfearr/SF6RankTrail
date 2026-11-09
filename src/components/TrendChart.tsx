@@ -11,6 +11,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import type { Match, MatchResult, RatingPoint } from '@shared/types'
 import { characterIconSrc } from '../lib/characterIcons'
 import { formatDelta } from '../lib/format'
+import { seriesKey } from '../lib/ratings'
 
 echarts.use([
   LineChart,
@@ -80,9 +81,6 @@ const ICON_SPACING = 24
 const resultLabel = (result: MatchResult): string =>
   result === 'win' ? '胜' : result === 'loss' ? '负' : '平'
 
-const seriesKey = (character: string | null, observedAt: number): string =>
-  `${character ?? ''}\u0000${observedAt}`
-
 export function TrendChart({ points, kind, matches, deltas }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null)
@@ -122,40 +120,22 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
     const multi = groups.size > 1
     const gridTop = multi ? 48 : 28
 
-    let previousDay = ''
-    const labels = points.map((point) => {
-      const date = new Date(point.observedAt)
-      const day = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
-      if (day === previousDay) return ''
-      previousDay = day
-      return `${date.getMonth() + 1}/${date.getDate()}`
-    })
+    const labels = points.map((_, index) => `#${index + 1}`)
 
-    const matchesByTime = new Map<number, Match>()
     const matchesBySeries = new Map<string, Match>()
     for (const match of matches) {
-      matchesByTime.set(match.playedAt, match)
       matchesBySeries.set(seriesKey(match.myChar, match.playedAt), match)
     }
 
-    const pointsByCharacter = new Map<string, RatingPoint[]>()
+    const matchByPointId = new Map<number, Match>()
+    const matchNumberByPointId = new Map<number, number>()
+    let matchNumber = 0
     for (const point of points) {
-      const key = point.character ?? ''
-      const group = pointsByCharacter.get(key)
-      if (group) group.push(point)
-      else pointsByCharacter.set(key, [point])
-    }
-
-    const previousMatchByPointId = new Map<number, Match>()
-    for (const group of pointsByCharacter.values()) {
-      group.sort((a, b) => a.observedAt - b.observedAt || a.id - b.id)
-      for (let index = 1; index < group.length; index += 1) {
-        const previous = group[index - 1]
-        const current = group[index]
-        if (!previous || !current) continue
-        const match = matchesBySeries.get(seriesKey(previous.character, previous.observedAt))
-        if (match) previousMatchByPointId.set(current.id, match)
-      }
+      const match = matchesBySeries.get(seriesKey(point.character, point.observedAt))
+      if (!match) continue
+      matchNumber += 1
+      matchByPointId.set(point.id, match)
+      matchNumberByPointId.set(point.id, matchNumber)
     }
 
     const series = [...groups.keys()].map((name) => ({
@@ -206,9 +186,9 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
             list.find((item) => item.value !== null && item.value !== undefined) ?? list[0]
           const point = points[first?.dataIndex ?? -1]
           if (!point) return ''
-          const match = matchesByTime.get(point.observedAt)
+          const match = matchByPointId.get(point.id)
           const lines = [
-            `第 ${(first?.dataIndex ?? 0) + 1} 场`,
+            `第 ${matchNumberByPointId.get(point.id) ?? (first?.dataIndex ?? 0) + 1} 场`,
             `${point.character ?? '未知角色'} ${kind} ${point.value.toLocaleString()}`,
             new Date(point.observedAt).toLocaleString()
           ]
@@ -222,7 +202,7 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
         boundaryGap: false,
         data: labels,
         axisLabel: {
-          interval: 0,
+          interval: 'auto',
           rotate: 0,
           margin: 6,
           fontSize: 10,
@@ -279,7 +259,7 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
       if (span <= 0) {
         const index = Math.max(0, Math.min(points.length - 1, Math.round(startIndex)))
         const point = points[index]
-        const match = point ? previousMatchByPointId.get(point.id) : undefined
+        const match = point ? matchByPointId.get(point.id) : undefined
         if (point && match) makeIcon(point, match, index, GRID_LEFT + plotWidth / 2, 28)
         setChartIcons(next)
         return
@@ -298,7 +278,7 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
       for (let index = firstIndex; index <= lastIndex; index += 1) {
         const point = points[index]
         if (!point) continue
-        const match = previousMatchByPointId.get(point.id)
+        const match = matchByPointId.get(point.id)
         if (!match) continue
         makeIcon(
           point,
@@ -335,6 +315,7 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
   return (
     <div
       className="chart-wrap"
+      data-point-count={points.length}
       data-series-count={seriesCount}
       data-icon-count={chartIcons.length}
       data-delta-count={chartIcons.filter((icon) => icon.delta !== null).length}

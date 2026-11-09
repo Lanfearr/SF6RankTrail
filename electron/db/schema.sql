@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS matches (
   my_mr         INTEGER,
   opp_mr        INTEGER,
   my_lp         INTEGER,
+  opp_lp        INTEGER,
   played_at     INTEGER NOT NULL,
   season        TEXT,
   created_at    INTEGER NOT NULL

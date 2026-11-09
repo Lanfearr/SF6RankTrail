@@ -1,5 +1,8 @@
 import type { RatingPoint } from '@shared/types'
 
+export const seriesKey = (character: string | null, observedAt: number): string =>
+  `${character ?? ''}\u0000${observedAt}`
+
 export function buildRatingDeltas(points: RatingPoint[]): Map<number, number> {
   const groups = new Map<string, RatingPoint[]>()
   for (const point of points) {

@@ -434,6 +434,7 @@ function matchesCsv(matches: Match[]): string {
     'my_mr',
     'opp_mr',
     'my_lp',
+    'opp_lp',
     'season'
   ]
   const rows = matches.map((match) =>
@@ -447,6 +448,7 @@ function matchesCsv(matches: Match[]): string {
       match.myMr,
       match.oppMr,
       match.myLp,
+      match.oppLp,
       match.season
     ]
       .map(csvCell)
@@ -508,6 +510,7 @@ function readImportFile(filePath: string): ImportResult {
         myMr: optionalNumber(entry['myMr']),
         oppMr: optionalNumber(entry['oppMr']),
         myLp: optionalNumber(entry['myLp']),
+        oppLp: optionalNumber(entry['oppLp']),
         playedAt,
         season: optionalString(entry['season']),
         createdAt: optionalNumber(entry['createdAt']) ?? playedAt
@@ -664,12 +667,18 @@ function registerIpc(): void {
 
   ipcMain.handle('sync:status', async () => syncStatus)
 
+  ipcMain.handle('app:version', async () => app.getVersion())
+
   ipcMain.handle('settings:get', async (_event, key: string) => repo.getSetting(key))
 
   ipcMain.handle('settings:set', async (_event, key: string, value: string) => {
     repo.setSetting(key, value)
     if (key === 'syncIntervalMs' && syncService?.isRunning()) {
       startSync()
+    }
+    if (key === 'sessionIdleMs') {
+      for (const player of repo.listPlayers()) repo.rebuildSessions(player.shortId)
+      hub.broadcast({ type: 'snapshot', payload: currentSnapshot() })
     }
     if (key === 'autoBackup') {
       scheduleAutoBackup()

@@ -12,7 +12,7 @@ const main = async (): Promise<void> => {
   const repo = new Repository(db)
   repo.upsertPlayer({ shortId: 'SELF', cfn: 'Self', isSelf: true })
 
-  const base = Date.now() - 8 * 60 * 60 * 1000
+  const base = Date.now() - 5 * 60 * 60 * 1000
   let seq = 0
 
   const makeMatch = (
@@ -32,6 +32,7 @@ const main = async (): Promise<void> => {
       myMr: mr,
       oppMr: mr - 20,
       myLp: null,
+      oppLp: null,
       playedAt: base + offsetMinutes * 60 * 1000,
       season: null,
       createdAt: Date.now()

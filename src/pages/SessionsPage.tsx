@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { SessionHistoryEntry } from '@shared/types'
 import { EmptyState, LoadingBlock, PageHeader, StatCard } from '../components/Page'
+import { useAppStore } from '../store/useAppStore'
 
 interface Props {
   shortId: string | null
@@ -23,8 +24,20 @@ const formatDuration = (row: SessionHistoryEntry): string => {
 }
 
 export function SessionsPage({ shortId, lastEvent }: Props) {
+  const refresh = useAppStore((state) => state.refresh)
   const [rows, setRows] = useState<SessionHistoryEntry[]>([])
   const [loading, setLoading] = useState(false)
+  const [idleHours, setIdleHours] = useState('3')
+  const [idleSaving, setIdleSaving] = useState(false)
+  const [idleMessage, setIdleMessage] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
+
+  useEffect(() => {
+    void window.api.getSetting('sessionIdleMs').then((value) => {
+      const ms = Number(value)
+      if (Number.isFinite(ms) && ms > 0) setIdleHours(String(ms / 3_600_000))
+    })
+  }, [])
 
   useEffect(() => {
     if (!shortId) {
@@ -44,7 +57,25 @@ export function SessionsPage({ shortId, lastEvent }: Props) {
     return () => {
       cancelled = true
     }
-  }, [shortId, lastEvent])
+  }, [shortId, lastEvent, reloadKey])
+
+  const applyIdleHours = async (): Promise<void> => {
+    const hours = Number(idleHours)
+    if (!Number.isFinite(hours) || hours < 0.5 || hours > 24) {
+      setIdleMessage('请输入 0.5 到 24 小时之间的数值')
+      return
+    }
+    setIdleSaving(true)
+    setIdleMessage('')
+    try {
+      await window.api.setSetting('sessionIdleMs', String(Math.round(hours * 3_600_000)))
+      await refresh()
+      setReloadKey((value) => value + 1)
+      setIdleMessage(`超过 ${hours} 小时没有新对局时会自动重置本次会话`)
+    } finally {
+      setIdleSaving(false)
+    }
+  }
 
   const summary = useMemo(() => {
     const matches = rows.reduce((sum, row) => sum + row.matches, 0)
@@ -57,7 +88,36 @@ export function SessionsPage({ shortId, lastEvent }: Props) {
 
   return (
     <div className="page">
-      <PageHeader title="会话历史" subtitle="按 3 小时间隔自动切分，回顾每一次上分过程" />
+      <PageHeader
+        title="会话历史"
+        subtitle={`超过 ${idleHours || '3'} 小时没有新对局时自动重置；历史会话按同一间隔切分`}
+        actions={
+          <>
+            <label className="date-field">
+              自动重置
+              <input
+                className="input compact"
+                type="number"
+                min="0.5"
+                max="24"
+                step="0.5"
+                value={idleHours}
+                onChange={(event) => setIdleHours(event.target.value)}
+                aria-label="会话自动重置周期（小时）"
+              />
+              小时
+            </label>
+            <button
+              className="btn small primary"
+              disabled={idleSaving}
+              onClick={() => void applyIdleHours()}
+            >
+              {idleSaving ? '保存中…' : '保存'}
+            </button>
+          </>
+        }
+      />
+      {idleMessage && <div className="status-text">{idleMessage}</div>}
       {!shortId ? (
         <EmptyState title="尚未选择账号" detail="请先登录或在设置中添加账号。" />
       ) : loading ? (
