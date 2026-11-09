@@ -321,12 +321,18 @@ CREATE TABLE IF NOT EXISTS settings (
 | `ratings:series`                | invoke | `{ shortId, kind, from, to }` |
 | `stats:characters`              | invoke | `shortId` → `CharacterStat[]` |
 | `stats:seasons`                 | invoke | `shortId` → `SeasonStat[]`    |
+| `sessions:history`              | invoke | `shortId, limit?` → `SessionHistoryEntry[]` |
+| `stats:matchups`                | invoke | `shortId` → `MatchupStat[]`    |
+| `stats:rivals`                  | invoke | `shortId, limit?` → `RivalStat[]` |
 | `diagnostics:get`               | invoke | `shortId` → `Diagnostics`     |
 | `session:refresh`               | invoke | `shortId` → `SessionSummary`  |
 | `settings:get` / `settings:set` | invoke | `{ key, value }`              |
 | `export:matchesCsv`             | invoke | `shortId` → `ExportResult`    |
 | `export:dataJson`               | invoke | `shortId` → `ExportResult`    |
+| `import:dataJson`               | invoke | → `ImportResult`              |
 | `export:database`               | invoke | → `ExportResult`              |
+| `backup:autoNow`                | invoke | → `ExportResult`              |
+| `backup:autoStatus`             | invoke | → `AutoBackupStatus`          |
 | `active:get` / `active:set`     | invoke | → `shortId` / `shortId`       |
 | `active:changed`                | event  | `shortId`                     |
 | `chart:open` / `chart:close`    | send   | —                             |
@@ -358,15 +364,18 @@ type ServerEvent =
 
 - 启动只打开主窗口（标准不透明窗口，约 1080×720），关闭主窗口退出应用
 - 顶栏：当前账号选择、同步状态、打开图表弹窗
-- 页面顺序：概览、对战记录、对战详情、角色统计、赛季报告、数据导出/备份、数据同步、设置（最后一项）
+- 页面顺序：概览、会话历史、目标与趋势、对战记录、对战详情、角色统计、对手分析、赛季报告、数据导出/备份、数据同步、设置（最后一项）
 - 概览：当前 MR/LP、本会话净上分、胜率、同步状态、最近对局
+- 会话历史：按 3 小时会话切分展示开始时间、时长、对局、胜负、MR/LP 净分和 MR 范围
+- 目标与趋势：按账号保存目标 MR/LP、显示目标进度、近期场均、预计场次、连胜/连败和近 12 周热力图
 - 对战记录：按 MR/LP、结果、角色、日期筛选并分页；点击进入对战详情
 - 对战详情：双方角色、赛前分数、单场变化、对手分数、时间/赛季/replay_id
 - 角色统计：各角色对局数、胜负、胜率、当前 MR/LP、最后对局
+- 对手分析：按对手角色汇总 matchup，按 opponent_id 追踪宿敌与最近结果
 - 赛季报告：按 season 或月份汇总对局、胜率、MR/LP 范围
-- 数据导出/备份：CSV、完整 JSON、SQLite 数据库备份
+- 数据导出/备份：CSV、完整 JSON、JSON 恢复导入、SQLite 数据库备份
 - 数据同步：登录状态、数据量、最近同步/对局、状态历史
-- 设置：账号增删、登录、同步间隔、图表默认模式/置顶/透明度、OBS 地址
+- 设置：账号增删、登录、同步间隔、自动备份、图表默认模式/置顶/透明度、OBS 地址
 
 ### 8.2 图表弹窗
 
@@ -520,6 +529,7 @@ npm run spike:m0 -- --short-id <Buckler_ID> --channel chrome --dump
 | 2026-11-08 | 手动会话/图标  | Mini MR/LP 手动切换与刷新；Pro 大字本次会话净上分；32 个角色图标与单场 ± badge；`session_marks` 手动会话基线；`spike:uitest` 覆盖 LP、图标、刷新  |
 | 2026-11-09 | 分数系统修正   | 对战记录明确为赛前分数；资料页当前 MR/LP 写入 snapshot；单场增减归属上一场，最新场用当前快照；最新自动/手动会话使用当前分数；图表图标后移至赛后数据点并显示单场 ±；同步刷新保留图表缩放；自测覆盖当前快照、UI badge 与缩放保持 |
 | 2026-11-09 | 主窗口/图表拆分 | 启动只开主窗口；图表改为独立 Mini/Pro 弹窗，Pro 固定最近 20 场；主窗口新增概览、对战记录/详情、角色统计、赛季报告、导出/备份、同步诊断、设置；账号在两窗联动；`spike:uitest` 覆盖页面、双窗口、最近 20 场与缩放保持 |
+| 2026-11-09 | A 组增强       | 新增会话历史、目标与趋势（目标 MR/LP、连胜、12 周热力图）、对手分析（角色 matchup + 宿敌）；JSON 备份恢复；自动备份（每 6 小时、保留 14 份）；Repository/IPC/UI 自测同步更新 |
 
 ---
 

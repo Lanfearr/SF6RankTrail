@@ -6,16 +6,22 @@ import { DiagnosticsPage } from './pages/DiagnosticsPage'
 import { ExportPage } from './pages/ExportPage'
 import { MatchDetailPage } from './pages/MatchDetailPage'
 import { MatchesPage } from './pages/MatchesPage'
+import { OpponentsPage } from './pages/OpponentsPage'
 import { OverviewPage } from './pages/OverviewPage'
+import { ProgressPage } from './pages/ProgressPage'
 import { SeasonPage } from './pages/SeasonPage'
+import { SessionsPage } from './pages/SessionsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { useAppStore } from './store/useAppStore'
 
 type Page =
   | 'overview'
+  | 'sessions'
+  | 'progress'
   | 'matches'
   | 'detail'
   | 'characters'
+  | 'opponents'
   | 'season'
   | 'export'
   | 'diagnostics'
@@ -23,9 +29,12 @@ type Page =
 
 const NAV: Array<{ page: Page; label: string }> = [
   { page: 'overview', label: '概览' },
+  { page: 'sessions', label: '会话历史' },
+  { page: 'progress', label: '目标与趋势' },
   { page: 'matches', label: '对战记录' },
   { page: 'detail', label: '对战详情' },
   { page: 'characters', label: '角色统计' },
+  { page: 'opponents', label: '对手分析' },
   { page: 'season', label: '赛季报告' },
   { page: 'export', label: '数据导出 / 备份' },
   { page: 'diagnostics', label: '数据同步' },
@@ -55,12 +64,18 @@ export default function App() {
     switch (page) {
       case 'overview':
         return <OverviewPage />
+      case 'sessions':
+        return <SessionsPage shortId={activeShortId} lastEvent={lastEvent} />
+      case 'progress':
+        return <ProgressPage shortId={activeShortId} lastEvent={lastEvent} />
       case 'matches':
         return <MatchesPage shortId={activeShortId} onSelectMatch={openMatch} />
       case 'detail':
         return <MatchDetailPage shortId={activeShortId} selectedMatch={selectedMatch} />
       case 'characters':
         return <CharactersPage shortId={activeShortId} lastEvent={lastEvent} />
+      case 'opponents':
+        return <OpponentsPage shortId={activeShortId} lastEvent={lastEvent} />
       case 'season':
         return <SeasonPage shortId={activeShortId} lastEvent={lastEvent} />
       case 'export':

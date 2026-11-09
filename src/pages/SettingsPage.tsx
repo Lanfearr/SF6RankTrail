@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { ChartMode } from '@shared/types'
+import type { AutoBackupStatus, ChartMode } from '@shared/types'
 import { PageHeader } from '../components/Page'
 import { useAppStore } from '../store/useAppStore'
 
@@ -21,6 +21,8 @@ export function SettingsPage() {
   const [chartMode, setChartMode] = useState<ChartMode>('mini')
   const [alwaysOnTop, setAlwaysOnTop] = useState(true)
   const [opacity, setOpacity] = useState(1)
+  const [autoBackup, setAutoBackup] = useState(true)
+  const [backupStatus, setBackupStatus] = useState<AutoBackupStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
 
@@ -29,6 +31,30 @@ export function SettingsPage() {
     [players, activeShortId]
   )
   const running = sync.state === 'syncing'
+
+  const loadBackupStatus = async (): Promise<void> => {
+    const status = await window.api.autoBackupStatus()
+    setBackupStatus(status)
+    setAutoBackup(status.enabled)
+  }
+
+  const applyAutoBackup = async (value: boolean): Promise<void> => {
+    setAutoBackup(value)
+    await window.api.setSetting('autoBackup', value ? '1' : '0')
+    await loadBackupStatus()
+    setMessage(value ? '自动备份已启用' : '自动备份已关闭')
+  }
+
+  const runBackup = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const result = await window.api.runAutoBackup()
+      await loadBackupStatus()
+      setMessage(result.ok ? `已备份到 ${result.path}` : result.message ?? '备份失败')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   useEffect(() => {
     void window.api.getSetting('syncIntervalMs').then((value) => {
@@ -48,6 +74,7 @@ export function SettingsPage() {
       const next = Number(value)
       if (Number.isFinite(next)) setOpacity(Math.min(1, Math.max(0.2, next)))
     })
+    void loadBackupStatus()
   }, [])
 
   const run = async (action: () => Promise<unknown>, label?: string): Promise<void> => {
@@ -200,6 +227,49 @@ export function SettingsPage() {
             </button>
           </div>
           <span className="muted small">允许范围 15000–120000 ms</span>
+        </section>
+
+        <section className="card">
+          <div className="card-header">
+            <h2>自动备份</h2>
+            <span className={autoBackup ? 'badge active' : 'badge'}>
+              {autoBackup ? '已启用' : '已关闭'}
+            </span>
+          </div>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={autoBackup}
+              onChange={(event) => void applyAutoBackup(event.target.checked)}
+            />
+            <span>每 6 小时自动备份数据库</span>
+          </label>
+          <p className="muted small">保留最近 14 份，保存在应用数据目录的 backups 文件夹。</p>
+          <div className="button-row">
+            <button className="btn" disabled={busy} onClick={() => void runBackup()}>
+              立即备份
+            </button>
+          </div>
+          {backupStatus && (
+            <div className="kv-list compact">
+              <div>
+                <span>备份目录</span>
+                <strong className="truncate" title={backupStatus.directory}>
+                  {backupStatus.directory}
+                </strong>
+              </div>
+              <div>
+                <span>已有备份</span>
+                <strong>{backupStatus.files} 份</strong>
+              </div>
+              <div>
+                <span>上次备份</span>
+                <strong>
+                  {backupStatus.lastAt ? new Date(backupStatus.lastAt).toLocaleString() : '—'}
+                </strong>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="card">

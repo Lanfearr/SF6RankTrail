@@ -1,14 +1,26 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
-import { copyFileSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { join } from 'node:path'
 import type {
+  AppSnapshot,
+  AutoBackupStatus,
   ChartMode,
   Diagnostics,
   ExportResult,
+  ImportResult,
   LoginResult,
   Match,
   MatchQuery,
+  Player,
   PlayerInput,
+  RatingPoint,
   RatingQuery,
   SyncStartResult,
   SyncStatus
@@ -31,6 +43,8 @@ const OVERLAY_PORT = 8765
 const SYNC_INTERVAL_MS = 20_000
 const MINI_SIZE = { width: 440, height: 340 }
 const PRO_SIZE = { width: 960, height: 660 }
+const AUTO_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000
+const AUTO_BACKUP_RETENTION = 14
 
 let mainWindow: BrowserWindow | null = null
 let chartWindow: BrowserWindow | null = null
@@ -47,6 +61,7 @@ let loginInFlight = false
 let quitting = false
 let activeShortId: string | null = null
 let syncStatus: SyncStatus = { state: 'idle', at: Date.now() }
+let autoBackupTimer: ReturnType<typeof setInterval> | null = null
 const statusHistory: SyncStatus[] = []
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -82,6 +97,15 @@ function broadcastActivePlayer(): void {
   if (shortId) repo.setSetting('activeShortId', shortId)
   for (const window of BrowserWindow.getAllWindows()) {
     window.webContents.send('active:changed', shortId)
+  }
+}
+
+function currentSnapshot(): AppSnapshot {
+  return {
+    players: repo.listPlayers(),
+    dashboards: repo.listDashboards(),
+    sync: syncStatus,
+    at: Date.now()
   }
 }
 
@@ -319,6 +343,81 @@ async function chooseSavePath(
   return result.canceled || !result.filePath ? null : result.filePath
 }
 
+async function chooseOpenPath(filters: Electron.FileFilter[]): Promise<string | null> {
+  const options: Electron.OpenDialogOptions = {
+    properties: ['openFile'],
+    filters
+  }
+  const parent = BrowserWindow.getFocusedWindow() ?? mainWindow
+  const result = parent
+    ? await dialog.showOpenDialog(parent, options)
+    : await dialog.showOpenDialog(options)
+  if (result.canceled) return null
+  return result.filePaths[0] ?? null
+}
+
+function autoBackupDirectory(): string {
+  return join(app.getPath('userData'), 'backups')
+}
+
+function listAutoBackupFiles(): string[] {
+  try {
+    return readdirSync(autoBackupDirectory())
+      .filter((name) => name.startsWith('sf6scorer-') && name.endsWith('.db'))
+      .sort()
+  } catch {
+    return []
+  }
+}
+
+function autoBackupStatus(): AutoBackupStatus {
+  const lastAt = Number(repo.getSetting('lastAutoBackupAt'))
+  return {
+    enabled: repo.getSetting('autoBackup') !== '0',
+    directory: autoBackupDirectory(),
+    files: listAutoBackupFiles().length,
+    lastPath: repo.getSetting('lastAutoBackupPath'),
+    lastAt: Number.isFinite(lastAt) && lastAt > 0 ? lastAt : null
+  }
+}
+
+function runAutoBackup(force = false): ExportResult {
+  try {
+    if (!force && repo.getSetting('autoBackup') === '0') {
+      return { ok: false, message: '自动备份已关闭' }
+    }
+    const directory = autoBackupDirectory()
+    mkdirSync(directory, { recursive: true })
+    database.exec('PRAGMA wal_checkpoint(TRUNCATE);')
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const filePath = join(directory, `sf6scorer-${stamp}.db`)
+    copyFileSync(dbPath, filePath)
+    repo.setSetting('lastAutoBackupPath', filePath)
+    repo.setSetting('lastAutoBackupAt', String(Date.now()))
+    const files = listAutoBackupFiles()
+    for (const old of files.slice(0, Math.max(0, files.length - AUTO_BACKUP_RETENTION))) {
+      try {
+        rmSync(join(directory, old), { force: true })
+      } catch {
+        // keep pruning even if an old backup cannot be removed
+      }
+    }
+    return { ok: true, path: filePath }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+function scheduleAutoBackup(): void {
+  if (autoBackupTimer) {
+    clearInterval(autoBackupTimer)
+    autoBackupTimer = null
+  }
+  if (!repo || repo.getSetting('autoBackup') === '0') return
+  setTimeout(() => runAutoBackup(), 5_000)
+  autoBackupTimer = setInterval(() => runAutoBackup(), AUTO_BACKUP_INTERVAL_MS)
+}
+
 function csvCell(value: unknown): string {
   const text = value === null || value === undefined ? '' : String(value)
   return `"${text.replace(/"/g, '""')}"`
@@ -354,6 +453,106 @@ function matchesCsv(matches: Match[]): string {
       .join(',')
   )
   return `\uFEFF${header.join(',')}\r\n${rows.join('\r\n')}\r\n`
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+const optionalString = (value: unknown): string | null =>
+  typeof value === 'string' && value.length > 0 ? value : null
+
+const optionalNumber = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) ? value : null
+
+function readImportFile(filePath: string): ImportResult {
+  const raw = JSON.parse(readFileSync(filePath, 'utf8')) as unknown
+  if (!isRecord(raw) || !isRecord(raw['player'])) {
+    throw new Error('不是有效的 SF6 Scorer JSON 备份')
+  }
+  const playerRaw = raw['player']
+  const shortId = playerRaw['shortId']
+  if (typeof shortId !== 'string' || shortId.length === 0) {
+    throw new Error('备份缺少 player.shortId')
+  }
+
+  const player: Player = {
+    shortId,
+    cfn: optionalString(playerRaw['cfn']),
+    displayName: optionalString(playerRaw['displayName']),
+    isSelf: playerRaw['isSelf'] === true,
+    lastSynced: optionalNumber(playerRaw['lastSynced']),
+    createdAt: optionalNumber(playerRaw['createdAt']) ?? Date.now()
+  }
+
+  const matches: Match[] = []
+  if (Array.isArray(raw['matches'])) {
+    for (const entry of raw['matches']) {
+      if (!isRecord(entry)) continue
+      const result = entry['result']
+      const playedAt = optionalNumber(entry['playedAt'])
+      const replayId = entry['replayId']
+      if (
+        typeof replayId !== 'string' ||
+        playedAt === null ||
+        (result !== 'win' && result !== 'loss' && result !== 'draw')
+      ) {
+        continue
+      }
+      matches.push({
+        replayId,
+        shortId,
+        opponentId: optionalString(entry['opponentId']),
+        myChar: optionalString(entry['myChar']),
+        oppChar: optionalString(entry['oppChar']),
+        result,
+        myMr: optionalNumber(entry['myMr']),
+        oppMr: optionalNumber(entry['oppMr']),
+        myLp: optionalNumber(entry['myLp']),
+        playedAt,
+        season: optionalString(entry['season']),
+        createdAt: optionalNumber(entry['createdAt']) ?? playedAt
+      })
+    }
+  }
+
+  const ratings: RatingPoint[] = []
+  const ratingsRaw = isRecord(raw['ratings']) ? raw['ratings'] : null
+  const groups = ratingsRaw ? [ratingsRaw['MR'], ratingsRaw['LP']] : []
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue
+    for (const entry of group) {
+      if (!isRecord(entry)) continue
+      const kind = entry['kind'] === 'MR' || entry['kind'] === 'LP' ? entry['kind'] : null
+      const source =
+        entry['source'] === 'battlelog' ||
+        entry['source'] === 'snapshot' ||
+        entry['source'] === 'manual'
+          ? entry['source']
+          : null
+      const value = optionalNumber(entry['value'])
+      const observedAt = optionalNumber(entry['observedAt'])
+      if (!kind || !source || value === null || observedAt === null) continue
+      ratings.push({
+        id: optionalNumber(entry['id']) ?? 0,
+        shortId,
+        character: optionalString(entry['character']),
+        kind,
+        value,
+        source,
+        estimated: entry['estimated'] === true,
+        observedAt
+      })
+    }
+  }
+
+  if (matches.length === 0 && ratings.length === 0) {
+    throw new Error('备份中没有可导入的对局或分数数据')
+  }
+
+  const summary = repo.importPlayerData({ player, matches, ratings })
+  broadcastActivePlayer()
+  hub.broadcast({ type: 'snapshot', payload: currentSnapshot() })
+  return { ok: true, path: filePath, summary }
 }
 
 function getDiagnostics(shortId: string): Diagnostics {
@@ -432,6 +631,18 @@ function registerIpc(): void {
 
   ipcMain.handle('stats:seasons', async (_event, shortId: string) => repo.getSeasonReport(shortId))
 
+  ipcMain.handle('sessions:history', async (_event, shortId: string, limit?: number) =>
+    repo.listSessionHistory(shortId, limit)
+  )
+
+  ipcMain.handle('stats:matchups', async (_event, shortId: string) =>
+    repo.getMatchupStats(shortId)
+  )
+
+  ipcMain.handle('stats:rivals', async (_event, shortId: string, limit?: number) =>
+    repo.getRivalStats(shortId, limit)
+  )
+
   ipcMain.handle('diagnostics:get', async (_event, shortId: string) => getDiagnostics(shortId))
 
   ipcMain.handle('session:refresh', async (_event, shortId: string) => {
@@ -459,6 +670,9 @@ function registerIpc(): void {
     repo.setSetting(key, value)
     if (key === 'syncIntervalMs' && syncService?.isRunning()) {
       startSync()
+    }
+    if (key === 'autoBackup') {
+      scheduleAutoBackup()
     }
   })
 
@@ -499,6 +713,20 @@ function registerIpc(): void {
       return { ok: false, message: error instanceof Error ? error.message : String(error) }
     }
   })
+
+  ipcMain.handle('import:dataJson', async (): Promise<ImportResult> => {
+    try {
+      const filePath = await chooseOpenPath([{ name: 'JSON', extensions: ['json'] }])
+      if (!filePath) return { ok: false, message: '已取消' }
+      return readImportFile(filePath)
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('backup:autoNow', async (): Promise<ExportResult> => runAutoBackup(true))
+
+  ipcMain.handle('backup:autoStatus', async (): Promise<AutoBackupStatus> => autoBackupStatus())
 
   ipcMain.handle('export:database', async (): Promise<ExportResult> => {
     try {
@@ -560,12 +788,7 @@ app.whenReady().then(async () => {
   hub = new RealtimeHub()
   overlay = new OverlayServer(OVERLAY_PORT)
 
-  hub.setSnapshotProvider(() => ({
-    players: repo.listPlayers(),
-    dashboards: repo.listDashboards(),
-    sync: syncStatus,
-    at: Date.now()
-  }))
+  hub.setSnapshotProvider(currentSnapshot)
   hub.attach(overlay.server)
 
   try {
@@ -576,6 +799,7 @@ app.whenReady().then(async () => {
 
   registerIpc()
   createMainWindow()
+  scheduleAutoBackup()
 
   if (hasSavedSession(sessionPath) && repo.listPlayers().length > 0) {
     const result = startSync()
@@ -599,6 +823,10 @@ app.on('before-quit', () => {
   if (repo) {
     saveBounds(mainBoundsKey(), mainWindow)
     saveBounds(chartBoundsKey(chartMode()), chartWindow)
+  }
+  if (autoBackupTimer) {
+    clearInterval(autoBackupTimer)
+    autoBackupTimer = null
   }
   syncService?.stop()
   void source?.close()

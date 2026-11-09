@@ -138,6 +138,7 @@ const main = async (): Promise<void> => {
     })
   }
 
+  seedRepo.rebuildSessions(shortId)
   seedRepo.upsertPlayer({
     shortId: bulkId,
     cfn: bulkId,
@@ -227,9 +228,12 @@ const main = async (): Promise<void> => {
     const nav = await window.locator('.nav-item').allTextContents()
     assert.deepEqual(nav, [
       '概览',
+      '会话历史',
+      '目标与趋势',
       '对战记录',
       '对战详情',
       '角色统计',
+      '对手分析',
       '赛季报告',
       '数据导出 / 备份',
       '数据同步',
@@ -242,6 +246,24 @@ const main = async (): Promise<void> => {
       undefined,
       { timeout: 5_000 }
     )
+
+    await window.click('.nav-item:has-text("会话历史")')
+    await window.waitForSelector('.session-table .stats-table-row', { timeout: 5_000 })
+    assert.equal(await window.locator('.session-table .stats-table-row').count(), 1)
+
+    await window.click('.nav-item:has-text("目标与趋势")')
+    await window.waitForSelector('.calendar-card', { timeout: 5_000 })
+    assert.equal(await window.locator('.heatmap .heatmap-cell').count(), 84)
+    await window.locator('.goal-inputs input').first().fill('1900')
+    await window.click('.goal-inputs button:has-text("保存目标")')
+    await window.waitForSelector('.toast', { timeout: 5_000 })
+    assert.equal(await window.textContent('.toast'), '目标已保存')
+
+    await window.click('.nav-item:has-text("对手分析")')
+    await window.waitForSelector('.matchup-table .stats-table-row', { timeout: 5_000 })
+    assert.equal(await window.locator('.matchup-table .stats-table-row').count(), 5)
+    assert.equal(await window.locator('.rival-table .stats-table-row').count(), 5)
+
     await window.click('.nav-item:has-text("对战记录")')
     await window.waitForSelector('.match-table-row', { timeout: 5_000 })
     assert.equal(await window.locator('.match-table-row').count(), 5)
@@ -262,7 +284,7 @@ const main = async (): Promise<void> => {
 
     await window.click('.nav-item:has-text("数据导出 / 备份")')
     await window.waitForSelector('.export-card', { timeout: 5_000 })
-    assert.equal(await window.locator('.export-card').count(), 3)
+    assert.equal(await window.locator('.export-card').count(), 4)
 
     await window.click('.nav-item:has-text("数据同步")')
     await window.waitForSelector('.stat-card', { timeout: 5_000 })
@@ -271,6 +293,14 @@ const main = async (): Promise<void> => {
     await window.click('.nav-item:has-text("设置")')
     await window.waitForSelector('.settings-grid', { timeout: 5_000 })
     assert.equal(await window.locator('.player-tag').count(), 2)
+    await window.waitForSelector('.card:has-text("自动备份")', { timeout: 5_000 })
+    assert.equal(await window.textContent('.card:has-text("自动备份") .badge'), '已启用')
+    await window.click('.card:has-text("自动备份") button:has-text("立即备份")')
+    await window.waitForFunction(
+      () => document.querySelector('.toast')?.textContent?.startsWith('已备份到'),
+      undefined,
+      { timeout: 5_000 }
+    )
 
     const inputs = window.locator('.add-player input')
     await inputs.nth(0).fill('999999999')
@@ -450,8 +480,20 @@ const main = async (): Promise<void> => {
 
     console.log('[ui-selftest] OK', { proSizes })
   } finally {
-    await app.close()
-    rmSync(userData, { recursive: true, force: true })
+    await Promise.race([
+      app.close().catch(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, 5_000))
+    ])
+    const child = (() => {
+      try {
+        return app.process()
+      } catch {
+        return null
+      }
+    })()
+    if (child && !child.killed) child.kill()
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    rmSync(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   }
 }
 

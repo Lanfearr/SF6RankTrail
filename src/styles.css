@@ -777,7 +777,7 @@ body {
   padding: 16px 12px;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   background: #131319;
-  overflow: auto;
+  overflow-y: auto;
 }
 
 .nav-item {
@@ -1559,6 +1559,162 @@ body {
   margin-top: 0;
 }
 
+.session-table .stats-table-head,
+.session-table .stats-table-row {
+  grid-template-columns: 1.35fr 0.75fr 0.5fr 0.65fr 0.7fr 0.7fr 1.1fr;
+}
+
+.compact-table {
+  font-size: 11px;
+}
+
+.compact-table .stats-table-head,
+.compact-table .stats-table-row {
+  padding: 8px 10px;
+  gap: 8px;
+}
+
+.matchup-table .stats-table-head,
+.matchup-table .stats-table-row,
+.rival-table .stats-table-head,
+.rival-table .stats-table-row {
+  grid-template-columns: 1.4fr 0.45fr 0.65fr 1fr 0.8fr;
+}
+
+.rival-table .stats-table-head,
+.rival-table .stats-table-row {
+  grid-template-columns: 1.1fr 0.45fr 0.65fr 1fr 0.65fr 0.8fr;
+}
+
+.truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goal-card,
+.streak-card {
+  gap: 14px;
+}
+
+.goal-inputs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.goal-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: #a1a1aa;
+}
+
+.goal-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.goal-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.goal-line span {
+  color: #a1a1aa;
+}
+
+.streak-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.streak-hero > .result {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border: 1px solid currentColor;
+  border-radius: 14px;
+  font-size: 22px;
+}
+
+.streak-hero div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.streak-hero strong {
+  font-size: 22px;
+}
+
+.calendar-card {
+  gap: 14px;
+}
+
+.heatmap-scroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.heatmap {
+  display: flex;
+  gap: 4px;
+  min-width: max-content;
+}
+
+.heatmap-week {
+  display: grid;
+  grid-template-rows: repeat(7, 14px);
+  gap: 4px;
+}
+
+.heatmap-cell {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.heatmap-cell.level-1 {
+  background: rgba(245, 158, 11, 0.28);
+}
+
+.heatmap-cell.level-2 {
+  background: rgba(245, 158, 11, 0.48);
+}
+
+.heatmap-cell.level-3 {
+  background: rgba(245, 158, 11, 0.7);
+}
+
+.heatmap-cell.level-4 {
+  background: #fbbf24;
+}
+
+.heatmap-cell.future {
+  opacity: 0.25;
+}
+
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  font-size: 11px;
+  color: #a1a1aa;
+}
+
 @media (max-width: 900px) {
   .stat-grid,
   .stat-grid.three {
@@ -1569,5 +1725,13 @@ body {
   .settings-grid,
   .detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .goal-inputs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .goal-inputs .btn {
+    grid-column: 1 / -1;
   }
 }

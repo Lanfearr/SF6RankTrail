@@ -50,6 +50,32 @@ export interface SessionSummary {
   lpDelta: number | null
 }
 
+export interface SessionHistoryEntry extends SessionSummary {
+  startRating: number | null
+  endRating: number | null
+  startLp: number | null
+  endLp: number | null
+}
+
+export interface MatchupStat {
+  character: string
+  matches: number
+  wins: number
+  losses: number
+  winRate: number
+  lastPlayedAt: number
+}
+
+export interface RivalStat {
+  opponentId: string
+  matches: number
+  wins: number
+  losses: number
+  winRate: number
+  lastPlayedAt: number
+  lastResult: MatchResult
+}
+
 export interface CurrentRating {
   character: string | null
   mr: number | null
@@ -184,6 +210,25 @@ export interface ExportResult {
   message?: string
 }
 
+export interface ImportSummary {
+  matches: number
+  ratings: number
+  skippedMatches: number
+  skippedRatings: number
+}
+
+export interface ImportResult extends ExportResult {
+  summary?: ImportSummary
+}
+
+export interface AutoBackupStatus {
+  enabled: boolean
+  directory: string
+  files: number
+  lastPath: string | null
+  lastAt: number | null
+}
+
 export interface RatingQuery {
   shortId: string
   kind: RatingKind
@@ -203,6 +248,9 @@ export interface IpcApi {
   dashboardList: () => Promise<PlayerDashboard[]>
   characterStats: (shortId: string) => Promise<CharacterStat[]>
   seasonReport: (shortId: string) => Promise<SeasonStat[]>
+  sessionHistory: (shortId: string, limit?: number) => Promise<SessionHistoryEntry[]>
+  matchupStats: (shortId: string) => Promise<MatchupStat[]>
+  rivalStats: (shortId: string, limit?: number) => Promise<RivalStat[]>
   diagnostics: (shortId: string) => Promise<Diagnostics>
   refreshSession: (shortId: string) => Promise<SessionSummary | null>
   syncStart: () => Promise<SyncStartResult>
@@ -212,7 +260,10 @@ export interface IpcApi {
   setSetting: (key: string, value: string) => Promise<void>
   exportMatchesCsv: (shortId: string) => Promise<ExportResult>
   exportDataJson: (shortId: string) => Promise<ExportResult>
+  importDataJson: () => Promise<ImportResult>
   backupDatabase: () => Promise<ExportResult>
+  runAutoBackup: () => Promise<ExportResult>
+  autoBackupStatus: () => Promise<AutoBackupStatus>
   openChart: () => void
   closeChart: () => void
   chartSetMode: (mode: ChartMode) => void

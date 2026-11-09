@@ -31,6 +31,7 @@ interface AppStore {
   setActive: (shortId: string) => void
   setActiveLocal: (shortId: string | null) => void
   setSync: (sync: SyncStatus) => void
+  setLastEvent: (message: string) => void
   clearWarning: () => void
 }
 
@@ -199,5 +200,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
   },
   setActiveLocal: (activeShortId) => set({ activeShortId }),
   setSync: (sync) => set({ sync }),
+  setLastEvent: (lastEvent) => set({ lastEvent }),
   clearWarning: () => set({ warning: null })
 }))

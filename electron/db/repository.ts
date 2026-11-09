@@ -1,14 +1,18 @@
 import type {
   CharacterStat,
   CurrentRating,
+  ImportSummary,
   Match,
   MatchQuery,
+  MatchupStat,
   Player,
   PlayerDashboard,
   RatingPoint,
   RatingQuery,
   RatingSnapshot,
+  RivalStat,
   SeasonStat,
+  SessionHistoryEntry,
   SessionSummary
 } from '../../shared/types'
 import type { Db } from './migrate'
@@ -218,6 +222,94 @@ export class Repository {
     return Number(info.changes) > 0
   }
 
+  importPlayerData(input: {
+    player: Player
+    matches: Match[]
+    ratings: RatingPoint[]
+  }): ImportSummary {
+    const shortId = input.player.shortId
+    let insertedMatches = 0
+    let skippedMatches = 0
+    let insertedRatings = 0
+    let skippedRatings = 0
+
+    this.upsertPlayer({
+      shortId,
+      cfn: input.player.cfn,
+      displayName: input.player.displayName,
+      isSelf: input.player.isSelf
+    })
+
+    this.db.exec('BEGIN')
+    try {
+      for (const match of input.matches) {
+        if (
+          !match ||
+          typeof match.replayId !== 'string' ||
+          !Number.isFinite(match.playedAt) ||
+          !['win', 'loss', 'draw'].includes(match.result)
+        ) {
+          skippedMatches += 1
+          continue
+        }
+        if (this.insertMatch({ ...match, shortId })) insertedMatches += 1
+        else skippedMatches += 1
+      }
+
+      for (const point of input.ratings) {
+        if (
+          !point ||
+          (point.kind !== 'MR' && point.kind !== 'LP') ||
+          !Number.isFinite(point.value) ||
+          !Number.isFinite(point.observedAt)
+        ) {
+          skippedRatings += 1
+          continue
+        }
+        const exists = this.db
+          .prepare(
+            `SELECT 1 AS ok FROM rating_points
+             WHERE short_id = ? AND kind = ? AND value = ? AND observed_at = ?
+               AND COALESCE(character, '') = ? AND source = ?`
+          )
+          .get(
+            shortId,
+            point.kind,
+            point.value,
+            point.observedAt,
+            point.character ?? '',
+            point.source
+          )
+        if (exists) {
+          skippedRatings += 1
+          continue
+        }
+        this.insertRating({
+          shortId,
+          character: point.character,
+          kind: point.kind,
+          value: point.value,
+          source: point.source,
+          estimated: point.estimated === true,
+          observedAt: point.observedAt
+        })
+        insertedRatings += 1
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+
+    this.rebuildSessions(shortId)
+    return {
+      matches: insertedMatches,
+      ratings: insertedRatings,
+      skippedMatches,
+      skippedRatings
+    }
+  }
+
   hasMatch(replayId: string): boolean {
     const row = this.db.prepare('SELECT 1 AS ok FROM matches WHERE replay_id = ?').get(replayId)
     return Boolean(row)
@@ -417,6 +509,19 @@ export class Repository {
       .prepare('SELECT * FROM sessions WHERE short_id = ? ORDER BY started_at ASC')
       .all(shortId) as unknown as SessionRow[]
     return rows.map((row) => this.toSessionSummary(row))
+  }
+
+  listSessionHistory(shortId: string, limit = 100): SessionHistoryEntry[] {
+    const rows = this.db
+      .prepare('SELECT * FROM sessions WHERE short_id = ? ORDER BY started_at DESC LIMIT ?')
+      .all(shortId, Math.max(1, limit)) as unknown as SessionRow[]
+    return rows.map((row) => ({
+      ...this.toSessionSummary(row),
+      startRating: row.start_rating,
+      endRating: row.end_rating,
+      startLp: row.start_lp,
+      endLp: row.end_lp
+    }))
   }
 
   getLatestSession(shortId: string): SessionSummary | null {
@@ -647,6 +752,82 @@ export class Repository {
         currentMr: this.getLatestRating(shortId, 'MR', row.character)?.value ?? null,
         currentLp: this.getLatestRating(shortId, 'LP', row.character)?.value ?? null,
         lastPlayedAt: row.last_played_at
+      }
+    })
+  }
+
+  getMatchupStats(shortId: string): MatchupStat[] {
+    const rows = this.db
+      .prepare(
+        `SELECT opp_char AS character,
+                COUNT(*) AS matches,
+                SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) AS losses,
+                MAX(played_at) AS last_played_at
+         FROM matches
+         WHERE short_id = ? AND opp_char IS NOT NULL
+         GROUP BY opp_char
+         ORDER BY matches DESC, last_played_at DESC`
+      )
+      .all(shortId) as unknown as Array<{
+      character: string
+      matches: number
+      wins: number
+      losses: number
+      last_played_at: number
+    }>
+
+    return rows.map((row) => {
+      const matches = Number(row.matches)
+      const wins = Number(row.wins)
+      return {
+        character: row.character,
+        matches,
+        wins,
+        losses: Number(row.losses),
+        winRate: matches > 0 ? wins / matches : 0,
+        lastPlayedAt: row.last_played_at
+      }
+    })
+  }
+
+  getRivalStats(shortId: string, limit = 30): RivalStat[] {
+    const rows = this.db
+      .prepare(
+        `SELECT m.opponent_id,
+                COUNT(*) AS matches,
+                SUM(CASE WHEN m.result = 'win' THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN m.result = 'loss' THEN 1 ELSE 0 END) AS losses,
+                MAX(m.played_at) AS last_played_at,
+                (SELECT m2.result FROM matches m2
+                 WHERE m2.short_id = m.short_id AND m2.opponent_id = m.opponent_id
+                 ORDER BY m2.played_at DESC LIMIT 1) AS last_result
+         FROM matches m
+         WHERE m.short_id = ? AND m.opponent_id IS NOT NULL
+         GROUP BY m.opponent_id
+         ORDER BY matches DESC, last_played_at DESC
+         LIMIT ?`
+      )
+      .all(shortId, Math.max(1, limit)) as unknown as Array<{
+      opponent_id: string
+      matches: number
+      wins: number
+      losses: number
+      last_played_at: number
+      last_result: RivalStat['lastResult']
+    }>
+
+    return rows.map((row) => {
+      const matches = Number(row.matches)
+      const wins = Number(row.wins)
+      return {
+        opponentId: row.opponent_id,
+        matches,
+        wins,
+        losses: Number(row.losses),
+        winRate: matches > 0 ? wins / matches : 0,
+        lastPlayedAt: row.last_played_at,
+        lastResult: row.last_result
       }
     })
   }

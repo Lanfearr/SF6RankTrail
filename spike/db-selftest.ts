@@ -2,6 +2,7 @@ import assert from 'node:assert'
 import { readFileSync } from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { Repository } from '../electron/db/repository'
+import type { Match, Player, RatingPoint } from '../shared/types'
 
 const db = new DatabaseSync(':memory:')
 db.exec(readFileSync('electron/db/schema.sql', 'utf8'))
@@ -127,6 +128,78 @@ assert.equal(
 )
 assert.equal(repo.listRatings({ shortId: 'CURRENT', kind: 'MR' }).length, 2)
 assert.equal(repo.deletePlayer('CURRENT'), true)
+
+repo.rebuildSessions('SELF')
+const history = repo.listSessionHistory('SELF')
+assert.equal(history.length, 1)
+assert.equal(history[0]?.matches, 2)
+assert.equal(history[0]?.wins, 2)
+assert.equal(history[0]?.startRating, 1800)
+assert.equal(history[0]?.endRating, 1830)
+
+const matchups = repo.getMatchupStats('SELF')
+assert.equal(matchups.length, 1)
+assert.equal(matchups[0]?.character, 'Ken')
+assert.equal(matchups[0]?.matches, 2)
+assert.equal(matchups[0]?.winRate, 1)
+
+const rivals = repo.getRivalStats('SELF')
+assert.equal(rivals.length, 1)
+assert.equal(rivals[0]?.opponentId, 'OPP')
+assert.equal(rivals[0]?.matches, 2)
+assert.equal(rivals[0]?.lastResult, 'win')
+
+const importStart = Date.now() + 240_000
+const importPlayer: Player = {
+  shortId: 'IMPORT',
+  cfn: 'ImportPlayer',
+  displayName: '导入账号',
+  isSelf: false,
+  lastSynced: null,
+  createdAt: importStart
+}
+const importMatch: Match = {
+  replayId: 'import-1',
+  shortId: 'IMPORT',
+  opponentId: 'IMPORT-OPP',
+  myChar: 'Ryu',
+  oppChar: 'Ken',
+  result: 'win',
+  myMr: 1800,
+  oppMr: 1790,
+  myLp: null,
+  playedAt: importStart,
+  season: null,
+  createdAt: importStart
+}
+const importRating: RatingPoint = {
+  id: 0,
+  shortId: 'IMPORT',
+  character: 'Ryu',
+  kind: 'MR',
+  value: 1800,
+  source: 'battlelog',
+  estimated: false,
+  observedAt: importStart
+}
+const firstImport = repo.importPlayerData({
+  player: importPlayer,
+  matches: [importMatch],
+  ratings: [importRating]
+})
+assert.equal(firstImport.matches, 1)
+assert.equal(firstImport.ratings, 1)
+assert.equal(repo.listSessionHistory('IMPORT').length, 1)
+const secondImport = repo.importPlayerData({
+  player: importPlayer,
+  matches: [importMatch],
+  ratings: [importRating]
+})
+assert.equal(secondImport.matches, 0)
+assert.equal(secondImport.ratings, 0)
+assert.equal(secondImport.skippedMatches, 1)
+assert.equal(secondImport.skippedRatings, 1)
+assert.equal(repo.deletePlayer('IMPORT'), true)
 
 repo.setSetting('backfill:SELF', '1')
 assert.equal(repo.deletePlayer('SELF'), true)
