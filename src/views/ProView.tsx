@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Match, RatingKind, RatingPoint } from '@shared/types'
 import { TrendChart } from '../components/TrendChart'
-import { buildRatingDeltas, seriesKey } from '../lib/ratings'
+import { buildChartPoints, buildRatingDeltas } from '../lib/ratings'
 import { useAppStore } from '../store/useAppStore'
 
 const RECENT_MATCH_LIMIT = 20
@@ -62,9 +62,7 @@ export function ProView() {
 
   const windowPoints = useMemo(
     () =>
-      windowStart === null
-        ? points
-        : points.filter((point) => point.observedAt >= windowStart),
+      windowStart === null ? points : points.filter((point) => point.observedAt >= windowStart),
     [points, windowStart]
   )
 
@@ -80,7 +78,8 @@ export function ProView() {
     [windowPoints]
   )
 
-  const recentCharacter = recentMatches[0]?.myChar ?? windowPoints[windowPoints.length - 1]?.character ?? null
+  const recentCharacter =
+    recentMatches[0]?.myChar ?? windowPoints[windowPoints.length - 1]?.character ?? null
   const selectedCharacter = character ?? recentCharacter ?? 'all'
   const effectiveCharacter =
     selectedCharacter === 'all' || characters.includes(selectedCharacter)
@@ -95,33 +94,7 @@ export function ProView() {
     [windowPoints, effectiveCharacter]
   )
 
-  const chartPoints = useMemo(() => {
-    const matchesBySeries = new Map<string, Match>()
-    for (const match of matches) {
-      matchesBySeries.set(seriesKey(match.myChar, match.playedAt), match)
-    }
-
-    const groups = new Map<string, RatingPoint[]>()
-    for (const point of filtered) {
-      const key = point.character ?? ''
-      const group = groups.get(key)
-      if (group) group.push(point)
-      else groups.set(key, [point])
-    }
-
-    const result: RatingPoint[] = []
-    for (const group of groups.values()) {
-      group.sort((a, b) => a.observedAt - b.observedAt || a.id - b.id)
-      group.forEach((point, index) => {
-        if (point.source !== 'battlelog') return
-        if (!matchesBySeries.has(seriesKey(point.character, point.observedAt))) return
-        const next = group[index + 1]
-        result.push(next ? { ...point, value: next.value } : point)
-      })
-    }
-
-    return result.sort((a, b) => a.observedAt - b.observedAt || a.id - b.id)
-  }, [filtered, matches])
+  const chartPoints = useMemo(() => buildChartPoints(filtered, matches), [filtered, matches])
 
   const stats = useMemo(() => {
     const values = filtered.map((point) => point.value)
@@ -140,9 +113,7 @@ export function ProView() {
   const sessionDeltaClass =
     sessionDelta === null ? '' : sessionDelta > 0 ? 'up' : sessionDelta < 0 ? 'down' : ''
   const sessionDeltaText =
-    sessionDelta === null
-      ? '—'
-      : `${sessionDelta > 0 ? '+' : ''}${sessionDelta.toLocaleString()}`
+    sessionDelta === null ? '—' : `${sessionDelta > 0 ? '+' : ''}${sessionDelta.toLocaleString()}`
 
   const refresh = (): void => {
     if (!shortId) return
@@ -161,7 +132,9 @@ export function ProView() {
               <span className="session-label">本次会话净上分</span>
             </div>
             <div className="session-meta">
-              {session ? `${session.matches} 场 · ${session.wins}W ${session.losses}L` : '0 场 · 0W 0L'}
+              {session
+                ? `${session.matches} 场 · ${session.wins}W ${session.losses}L`
+                : '0 场 · 0W 0L'}
             </div>
           </div>
 
@@ -224,12 +197,7 @@ export function ProView() {
         </aside>
 
         <section className="chart-column">
-          <TrendChart
-            points={chartPoints}
-            kind={kind}
-            matches={matches}
-            deltas={ratingDeltas}
-          />
+          <TrendChart points={chartPoints} kind={kind} matches={matches} deltas={ratingDeltas} />
         </section>
       </main>
     </div>

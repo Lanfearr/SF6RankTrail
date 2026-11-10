@@ -77,11 +77,46 @@ const main = async (): Promise<void> => {
   })
   seedRepo.startSession(shortId, start)
   const seedMatches = [
-    { replayId: 'ui-1', myChar: 'Ryu', oppChar: 'Ken', result: 'win' as const, mr: 1800, lp: 12000 },
-    { replayId: 'ui-2', myChar: 'Ken', oppChar: 'Chun-Li', result: 'loss' as const, mr: 1795, lp: 12050 },
-    { replayId: 'ui-3', myChar: 'Cammy', oppChar: 'A.K.I.', result: 'win' as const, mr: 1815, lp: 12075 },
-    { replayId: 'ui-4', myChar: 'Ryu', oppChar: 'JP', result: 'loss' as const, mr: 1810, lp: 12025 },
-    { replayId: 'ui-5', myChar: 'Cammy', oppChar: 'M. Bison', result: 'win' as const, mr: 1830, lp: 12125 }
+    {
+      replayId: 'ui-1',
+      myChar: 'Ryu',
+      oppChar: 'Ken',
+      result: 'win' as const,
+      mr: 1800,
+      lp: 12000
+    },
+    {
+      replayId: 'ui-2',
+      myChar: 'Ken',
+      oppChar: 'Chun-Li',
+      result: 'loss' as const,
+      mr: 1795,
+      lp: 12050
+    },
+    {
+      replayId: 'ui-3',
+      myChar: 'Cammy',
+      oppChar: 'A.K.I.',
+      result: 'win' as const,
+      mr: 1815,
+      lp: 12075
+    },
+    {
+      replayId: 'ui-4',
+      myChar: 'Ryu',
+      oppChar: 'JP',
+      result: 'loss' as const,
+      mr: 1810,
+      lp: 12025
+    },
+    {
+      replayId: 'ui-5',
+      myChar: 'Cammy',
+      oppChar: 'M. Bison',
+      result: 'win' as const,
+      mr: 1830,
+      lp: 12125
+    }
   ]
   seedMatches.forEach((match, index) => {
     const at = start + (index + 1) * 60 * 1000
@@ -248,6 +283,11 @@ const main = async (): Promise<void> => {
       undefined,
       { timeout: 5_000 }
     )
+    await window.waitForSelector('.overview-chart-panel .chart-wrap', { timeout: 8_000 })
+    assert.equal(
+      await window.locator('.overview-chart-panel .chart-wrap').getAttribute('data-point-count'),
+      '5'
+    )
 
     await window.click('.nav-item:has-text("会话历史")')
     await window.waitForSelector('.session-table .stats-table-row', { timeout: 5_000 })
@@ -265,6 +305,22 @@ const main = async (): Promise<void> => {
     await window.waitForSelector('.matchup-table .stats-table-row', { timeout: 5_000 })
     assert.equal(await window.locator('.matchup-table .stats-table-row').count(), 5)
     assert.equal(await window.locator('.rival-table .stats-table-row').count(), 5)
+    await window.click('.matchup-table .sort-header:has-text("角色")')
+    await window.waitForFunction(
+      () =>
+        document.querySelector('.matchup-table .stats-table-row .char-cell strong')?.textContent ===
+        'A.K.I.',
+      undefined,
+      { timeout: 5_000 }
+    )
+    await window.click('.matchup-table .sort-header:has-text("角色")')
+    await window.waitForFunction(
+      () =>
+        document.querySelector('.matchup-table .stats-table-row .char-cell strong')?.textContent ===
+        'M. Bison',
+      undefined,
+      { timeout: 5_000 }
+    )
 
     await window.click('.nav-item:has-text("对战记录")')
     await window.waitForSelector('.match-table-row', { timeout: 5_000 })
@@ -344,7 +400,10 @@ const main = async (): Promise<void> => {
     const proSizes = await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows().map((target) => target.getSize())
     )
-    assert.equal(proSizes.some(([width, height]) => width === 960 && height === 660), true)
+    assert.equal(
+      proSizes.some(([width, height]) => width === 960 && height === 660),
+      true
+    )
 
     assert.equal(await chart.textContent('.session-gain'), '+35')
     assert.equal(await chart.textContent('.session-kind'), 'MR')
@@ -379,7 +438,10 @@ const main = async (): Promise<void> => {
       { timeout: 5_000 }
     )
     assert.equal(
-      await chart.locator('.chart-delta').allTextContents().then((items) => items.join(',')),
+      await chart
+        .locator('.chart-delta')
+        .allTextContents()
+        .then((items) => items.join(',')),
       '+10,-20,+15,-25,+20'
     )
     assert.equal(await chart.locator('.chart-hint').count(), 0)
@@ -425,10 +487,7 @@ const main = async (): Promise<void> => {
 
     const chartBox = await chart.locator('.chart').boundingBox()
     if (!chartBox) throw new Error('chart box missing')
-    await chart.mouse.move(
-      chartBox.x + chartBox.width * 0.55,
-      chartBox.y + chartBox.height * 0.45
-    )
+    await chart.mouse.move(chartBox.x + chartBox.width * 0.55, chartBox.y + chartBox.height * 0.45)
     await chart.mouse.wheel(0, -600)
     await chart.waitForFunction(
       () => Number(document.querySelector('.chart-wrap')?.getAttribute('data-icon-count')) < 5,
@@ -465,14 +524,8 @@ const main = async (): Promise<void> => {
       undefined,
       { timeout: 8_000 }
     )
-    assert.equal(
-      await chart.locator('.chart-wrap').getAttribute('data-delta-count'),
-      '20'
-    )
-    assert.equal(
-      await chart.locator('.chart-wrap').getAttribute('data-point-count'),
-      '20'
-    )
+    assert.equal(await chart.locator('.chart-wrap').getAttribute('data-delta-count'), '20')
+    assert.equal(await chart.locator('.chart-wrap').getAttribute('data-point-count'), '20')
     const statsText = (await chart.textContent('.stats-inline')) ?? ''
     assert.equal(statsText.includes('最近场次'), true)
     assert.equal(statsText.includes('20 场'), true)
