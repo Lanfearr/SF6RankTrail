@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react'
-import type { Diagnostics } from '@shared/types'
+import type { Diagnostics, SyncResult } from '@shared/types'
 import { EmptyState, LoadingBlock, PageHeader, StatCard } from '../components/Page'
 import { useAppStore } from '../store/useAppStore'
+
+type RescanTone = 'loading' | 'success' | 'info' | 'error'
+
+interface RescanNotice {
+  tone: RescanTone
+  title: string
+  detail?: string
+}
 
 interface Props {
   shortId: string | null
@@ -11,15 +19,32 @@ interface Props {
 const timeText = (value: number | null): string =>
   value ? new Date(value).toLocaleString() : '—'
 
+const fetchedRangeText = (result: SyncResult): string | null => {
+  if (result.oldestFetchedAt === undefined || result.newestFetchedAt === undefined) return null
+  return `${new Date(result.oldestFetchedAt).toLocaleString()} 至 ${new Date(result.newestFetchedAt).toLocaleString()}`
+}
+
 export function DiagnosticsPage({ shortId, lastEvent }: Props) {
   const sync = useAppStore((state) => state.sync)
+  const players = useAppStore((state) => state.players)
   const login = useAppStore((state) => state.login)
   const start = useAppStore((state) => state.start)
   const stop = useAppStore((state) => state.stop)
   const [data, setData] = useState<Diagnostics | null>(null)
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [rescanNotice, setRescanNotice] = useState<RescanNotice | null>(null)
   const [tick, setTick] = useState(0)
+
+  useEffect(() => {
+    setRescanNotice(null)
+  }, [shortId])
+
+  useEffect(() => {
+    if (!rescanNotice || rescanNotice.tone === 'loading') return
+    const timer = window.setTimeout(() => setRescanNotice(null), 10_000)
+    return () => window.clearTimeout(timer)
+  }, [rescanNotice])
 
   useEffect(() => {
     if (!shortId) {
@@ -56,6 +81,53 @@ export function DiagnosticsPage({ shortId, lastEvent }: Props) {
     }
   }
 
+  const rescan = async (): Promise<void> => {
+    if (!shortId) return
+    const player = players.find((entry) => entry.shortId === shortId)
+    const accountName = player?.displayName ?? player?.cfn ?? shortId
+    setBusy(true)
+    setRescanNotice({
+      tone: 'loading',
+      title: '正在扫描最近历史…',
+      detail: `账号：${accountName}`
+    })
+    try {
+      const result = await window.api.rescanHistory(shortId)
+      const range = fetchedRangeText(result)
+      const summary = `扫描 ${result.fetched} 场${range ? `，可查询范围 ${range}` : ''}`
+      if (result.fullScan) {
+        if (result.inserted > 0) {
+          setRescanNotice({
+            tone: 'success',
+            title: `重新扫描完毕，已补齐 ${result.inserted} 场`,
+            detail: `${summary}。`
+          })
+        } else {
+          setRescanNotice({
+            tone: 'info',
+            title: '重新扫描完毕，没有发现新场次',
+            detail: `${summary}。Buckler 当前只提供最近约 100 场，更早场次无法重新抓取。`
+          })
+        }
+      } else {
+        setRescanNotice({
+          tone: 'error',
+          title: '重新扫描失败',
+          detail: `${result.fullScanError ?? '完整扫描未完成'}。已回退增量同步：${summary}，补齐 ${result.inserted} 场。`
+        })
+      }
+      setTick((value) => value + 1)
+    } catch (error) {
+      setRescanNotice({
+        tone: 'error',
+        title: '重新扫描失败',
+        detail: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const running = sync.state === 'syncing'
 
   return (
@@ -67,6 +139,9 @@ export function DiagnosticsPage({ shortId, lastEvent }: Props) {
           <>
             <button className="btn" disabled={busy} onClick={() => setTick((value) => value + 1)}>
               刷新诊断
+            </button>
+            <button className="btn" disabled={busy || !shortId} onClick={() => void rescan()}>
+              重新扫描当前账号历史
             </button>
             <button className="btn primary" disabled={busy || running} onClick={() => void run(start)}>
               开始同步
@@ -153,6 +228,36 @@ export function DiagnosticsPage({ shortId, lastEvent }: Props) {
           </div>
         </>
       )}
+
+      {rescanNotice ? (
+        <div
+          className={`toast rescan-toast ${rescanNotice.tone}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span className="rescan-toast-body">
+            {rescanNotice.tone === 'loading' ? (
+              <span className="rescan-spinner" aria-hidden="true" />
+            ) : null}
+            <span>
+              <strong className="rescan-toast-title">{rescanNotice.title}</strong>
+              {rescanNotice.detail ? (
+                <span className="rescan-toast-detail">{rescanNotice.detail}</span>
+              ) : null}
+            </span>
+          </span>
+          {rescanNotice.tone !== 'loading' ? (
+            <button
+              className="toast-close"
+              type="button"
+              aria-label="关闭提示"
+              onClick={() => setRescanNotice(null)}
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -296,12 +296,12 @@ CREATE TABLE IF NOT EXISTS settings (
 
 - 登录：`loginWithChrome()` 启动普通 Chrome（独立 profile + 动态调试端口），等待用户手动登录；通过 `__NEXT_DATA__` 的 `loginUser.flg`、退出文案与 `/profile/{id}/` 链接识别登录成功，随后通过 `connectOverCDP` 读取 Cookie、UA 与 UA-CH，保存 `session.json` 并关闭 Chrome。
 - 采集：`ElectronBucklerSource` 把 `session.json` 的 Cookie 导入 Electron session，使用 `session.fetch` 打开 `battlelog/rank`，解析 `__NEXT_DATA__`；全程无可见窗口。
-- 分页：首次同步按页抓取全部可查询场次（读取 `total_page`，遇到空页/重复页停止，上限 200 页），完成后记录 `backfill:<shortId>`；后续轮询从第 1 页增量抓取，遇到已知场次即停止。批量回填只推送最新一条评分事件，避免 UI 抖动。对局时间取自 `uploaded_at`（Unix 秒）；昵称取自 `fighter_banner_info.personal_info.fighter_id`，仅在 `display_name` 为空时自动补全；单个账号抓取失败只发 `sync:warning`，不阻塞其他账号。
+- 分页：首次同步按页抓取全部可查询场次（读取 `total_page`，遇到空页/重复页停止，上限 200 页），完成后记录 `lastFullScanAt:<shortId>` 与 `backfill:<shortId>`；后续轮询从第 1 页增量抓取，只有在整页都没有新增场次时才停止，并继续多扫描一页作为边界缓冲。启动时及运行中每 1 小时执行一次全量核对，补齐分页边界或延迟上传的遗漏；全量失败时回退增量同步，5 分钟后重试。手动重扫强制全量检查当前账号，返回 `fullScanError`、`oldestFetchedAt`、`newestFetchedAt`；诊断页用右下角浮动提示展示扫描中/成功/无新增/失败状态，最终结果 10 秒后自动关闭，也可手动关闭。Buckler 只公开最近约 100 场（10 页），超出窗口的历史无法重新抓取。批量回填只推送最新一条评分事件，避免 UI 抖动。对局时间取自 `uploaded_at`（Unix 秒）；昵称取自 `fighter_banner_info.personal_info.fighter_id`，仅在 `display_name` 为空时自动补全；单个账号抓取失败只发 `sync:warning`，不阻塞其他账号。
 - 同步：`SyncService` 每 20s 拉取一次，按 `replay_id` 去重；新对局写入 `matches` 与 `rating_points`，并重建 `sessions`。
 - 当前分数：每轮同步比赛后额外抓取资料页，解析 `character_league_infos` 的 MR/LP，写入 `rating_points(source='snapshot')`；抓取失败只发一次 `当前分数获取失败` 告警，不阻塞对局同步。
 - 推送：新对局/评分/会话通过 `RealtimeHub` 广播；同步状态同时写入快照。
 - 账号：`auth:login` 异步执行登录并在成功后自动启动同步；`players:add` 可附带昵称，`players:remove` 删除账号及其对局/评分/会话数据，增删后自动重启同步。
-- 失败处理：403/401/登录跳转/Cloudflare 挑战页会返回明确错误，提示重新登录；连续 3 次 0 对局触发 `sync:warning`。
+- 失败处理：403/401/登录跳转/Cloudflare 挑战页会返回明确错误，提示重新登录；408/425/429/5xx 与网络异常最多重试 3 次并指数退避；连续 3 次 0 对局触发 `sync:warning`。
 
 ---
 
@@ -374,7 +374,7 @@ type ServerEvent =
 - 对手分析：按对手角色汇总 matchup，按 opponent_id 追踪宿敌与最近结果
 - 赛季报告：按 season 或月份汇总对局、胜率、MR/LP 范围
 - 数据导出/备份：CSV、完整 JSON、JSON 恢复导入、SQLite 数据库备份
-- 数据同步：登录状态、数据量、最近同步/对局、状态历史
+- 数据同步：登录状态、数据量、最近同步/对局、状态历史；当前账号手动重扫与浮动结果提示
 - 设置：账号增删、登录、同步间隔、自动备份、图表默认模式/置顶/透明度、OBS 地址
 
 ### 8.2 图表弹窗
@@ -530,7 +530,8 @@ npm run spike:m0 -- --short-id <Buckler_ID> --channel chrome --dump
 | 2026-11-09 | 分数系统修正   | 对战记录明确为赛前分数；资料页当前 MR/LP 写入 snapshot；单场增减归属上一场，最新场用当前快照；最新自动/手动会话使用当前分数；图表图标后移至赛后数据点并显示单场 ±；同步刷新保留图表缩放；自测覆盖当前快照、UI badge 与缩放保持 |
 | 2026-11-09 | 主窗口/图表拆分 | 启动只开主窗口；图表改为独立 Mini/Pro 弹窗，Pro 固定最近 20 场；主窗口新增概览、对战记录/详情、角色统计、赛季报告、导出/备份、同步诊断、设置；账号在两窗联动；`spike:uitest` 覆盖页面、双窗口、最近 20 场与缩放保持 |
 | 2026-11-09 | A 组增强       | 新增会话历史、目标与趋势（目标 MR/LP、连胜、12 周热力图）、对手分析（角色 matchup + 宿敌）；JSON 备份恢复；自动备份（每 6 小时、保留 14 份）；Repository/IPC/UI 自测同步更新 |
-| 2026-11-11 | 概览图表/排序  | 概览页新增全量趋势图，支持 MR/LP、角色、预设/自定义日期筛选与缩放；对手分析表头可排序；新增公共图表点构建函数；版本升至 0.1.3，自测覆盖图表与排序 |
+| 2026-11-11 | 概览图表/排序  | 概览页新增全量趋势图，横轴为日期，支持 MR/LP、角色、预设/自定义日期筛选与缩放，图表下方新增缩放条；对手分析表头可排序；新增公共图表点构建函数；自动备份默认间隔改为 24 小时；版本升至 0.1.3，自测覆盖图表与排序 |
+| 2026-11-12 | 重扫反馈       | 手动重扫仅针对当前账号；诊断页新增浮动提示，展示扫描中/成功/无新增/失败、扫描场次与时间范围，最终结果 10 秒自动关闭并可手动关闭；同步结果新增完整扫描错误与时间范围；补充分页/失败回退/重扫测试及 Buckler 100 场窗口说明 |
 
 ---
 

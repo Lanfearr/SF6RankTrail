@@ -29,6 +29,8 @@ interface Props {
   kind: 'MR' | 'LP'
   matches: Match[]
   deltas: ReadonlyMap<number, number>
+  xAxisMode?: 'match' | 'date'
+  showZoomSlider?: boolean
 }
 
 interface ChartIcon {
@@ -55,8 +57,7 @@ const readZoomRange = (chart: ReturnType<typeof echarts.init>): [number, number]
   const model = (
     chart as unknown as {
       getModel: () =>
-        | { getComponent: (name: string) => ZoomModel | ZoomModel[] | undefined }
-        | undefined
+        { getComponent: (name: string) => ZoomModel | ZoomModel[] | undefined } | undefined
     }
   ).getModel()
   if (!model) return null
@@ -76,12 +77,25 @@ const readZoomRange = (chart: ReturnType<typeof echarts.init>): [number, number]
 const GRID_LEFT = 56
 const GRID_RIGHT = 20
 const GRID_BOTTOM = 24
+const GRID_BOTTOM_WITH_SLIDER = 56
 const ICON_SPACING = 24
 
 const resultLabel = (result: MatchResult): string =>
   result === 'win' ? '胜' : result === 'loss' ? '负' : '平'
 
-export function TrendChart({ points, kind, matches, deltas }: Props) {
+const formatAxisDate = (timestamp: number): string => {
+  const date = new Date(timestamp)
+  return `${date.getMonth() + 1}/${date.getDate()}`
+}
+
+export function TrendChart({
+  points,
+  kind,
+  matches,
+  deltas,
+  xAxisMode = 'match',
+  showZoomSlider = false
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null)
   const iconsUpdateRef = useRef<() => void>(() => undefined)
@@ -119,8 +133,11 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
     }
     const multi = groups.size > 1
     const gridTop = multi ? 48 : 28
+    const gridBottom = showZoomSlider ? GRID_BOTTOM_WITH_SLIDER : GRID_BOTTOM
 
-    const labels = points.map((_, index) => `#${index + 1}`)
+    const labels = points.map((point, index) =>
+      xAxisMode === 'date' ? formatAxisDate(point.observedAt) : `#${index + 1}`
+    )
 
     const matchesBySeries = new Map<string, Match>()
     for (const match of matches) {
@@ -177,7 +194,7 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
             textStyle: { fontSize: 10, color: '#9ca3af' }
           }
         : undefined,
-      grid: { left: GRID_LEFT, right: GRID_RIGHT, top: gridTop, bottom: GRID_BOTTOM },
+      grid: { left: GRID_LEFT, right: GRID_RIGHT, top: gridTop, bottom: gridBottom },
       tooltip: {
         trigger: 'axis',
         formatter: (params: TooltipParam | TooltipParam[]) => {
@@ -192,13 +209,14 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
             `${point.character ?? '未知角色'} ${kind} ${point.value.toLocaleString()}`,
             new Date(point.observedAt).toLocaleString()
           ]
-          if (match) lines.splice(2, 0, `对手 ${match.oppChar ?? '?'} · ${resultLabel(match.result)}`)
+          if (match)
+            lines.splice(2, 0, `对手 ${match.oppChar ?? '?'} · ${resultLabel(match.result)}`)
           return lines.join('<br/>')
         }
       },
       xAxis: {
         type: 'category',
-        name: '场次',
+        name: xAxisMode === 'date' ? '日期' : '场次',
         boundaryGap: false,
         data: labels,
         axisLabel: {
@@ -212,7 +230,37 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
         axisLine: { lineStyle: { color: '#555' } }
       },
       yAxis: { type: 'value', scale: true, name: kind },
-      dataZoom: [{ type: 'inside', start: zoomStart, end: zoomEnd }],
+      dataZoom: [
+        { type: 'inside', start: zoomStart, end: zoomEnd },
+        ...(showZoomSlider
+          ? [
+              {
+                type: 'slider' as const,
+                start: zoomStart,
+                end: zoomEnd,
+                left: GRID_LEFT,
+                right: GRID_RIGHT,
+                bottom: 8,
+                height: 16,
+                showDetail: false,
+                brushSelect: false,
+                borderColor: 'transparent',
+                backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                fillerColor: 'rgba(245, 158, 11, 0.16)',
+                handleSize: 10,
+                handleStyle: { color: '#f59e0b', borderColor: '#f59e0b' },
+                dataBackground: {
+                  lineStyle: { color: '#52525b' },
+                  areaStyle: { color: 'rgba(82, 82, 91, 0.24)' }
+                },
+                selectedDataBackground: {
+                  lineStyle: { color: '#f59e0b' },
+                  areaStyle: { color: 'rgba(245, 158, 11, 0.14)' }
+                }
+              }
+            ]
+          : [])
+      ],
       series
     }
 
@@ -242,7 +290,7 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
         if (!src) return
         const rawY = chart.convertToPixel({ yAxisIndex: 0 }, point.value)
         const y = Number(Array.isArray(rawY) ? rawY[1] : rawY)
-        if (!Number.isFinite(y) || y < gridTop || y > height - GRID_BOTTOM) return
+        if (!Number.isFinite(y) || y < gridTop || y > height - gridBottom) return
         next.push({
           key: `${point.id}-${match.replayId}-${index}`,
           left,
@@ -280,13 +328,7 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
         if (!point) continue
         const match = matchByPointId.get(point.id)
         if (!match) continue
-        makeIcon(
-          point,
-          match,
-          index,
-          GRID_LEFT + ((index - startIndex) / span) * plotWidth,
-          size
-        )
+        makeIcon(point, match, index, GRID_LEFT + ((index - startIndex) / span) * plotWidth, size)
       }
 
       setChartIcons(next)
@@ -310,12 +352,14 @@ export function TrendChart({ points, kind, matches, deltas }: Props) {
       chart.off('finished', scheduleIcons)
       if (iconsUpdateRef.current === scheduleIcons) iconsUpdateRef.current = () => undefined
     }
-  }, [points, kind, matches, deltas])
+  }, [points, kind, matches, deltas, xAxisMode, showZoomSlider])
 
   return (
     <div
       className="chart-wrap"
       data-point-count={points.length}
+      data-axis-mode={xAxisMode}
+      data-zoom-slider={showZoomSlider ? 'true' : 'false'}
       data-series-count={seriesCount}
       data-icon-count={chartIcons.length}
       data-delta-count={chartIcons.filter((icon) => icon.delta !== null).length}

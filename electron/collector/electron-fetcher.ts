@@ -16,10 +16,12 @@ import {
   readBattleLogPageInfo,
   readPlayerName
 } from './parser'
+import { isRetryableStatus, parseRetryAfter, retryDelayMs } from './retry'
 
 const PARTITION = 'persist:sf6-buckler'
 const MAX_BACKFILL_PAGES = 200
 const PAGE_DELAY_MS = 600
+const MAX_ATTEMPTS = 3
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -110,41 +112,61 @@ export class ElectronBucklerSource implements MatchSource {
 
   private async fetchDocument(url: string): Promise<unknown> {
     const state = await this.ensureSession()
-    const response = await this.ses.fetch(url, {
-      headers: buildHeaders(state),
-      redirect: 'follow'
-    })
 
-    if (response.status === 403) {
-      throw new Error('登录态无效或 Cloudflare 风控拦截，请重新登录')
-    }
-    if (response.status === 401) {
-      throw new Error('登录已过期，请重新登录')
-    }
-    if (!response.ok) {
-      throw new Error(`Buckler HTTP ${response.status}`)
-    }
-    if (/login|signin|sign-in/i.test(response.url)) {
-      throw new Error('登录态失效，请重新登录')
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+      let response: Response
+      try {
+        response = await this.ses.fetch(url, {
+          headers: buildHeaders(state),
+          redirect: 'follow'
+        })
+      } catch (error) {
+        if (attempt + 1 >= MAX_ATTEMPTS) throw error
+        await sleep(retryDelayMs(attempt))
+        continue
+      }
+
+      if (response.status === 403) {
+        throw new Error('登录态无效或 Cloudflare 风控拦截，请重新登录')
+      }
+      if (response.status === 401) {
+        throw new Error('登录已过期，请重新登录')
+      }
+      if (!response.ok) {
+        if (isRetryableStatus(response.status) && attempt + 1 < MAX_ATTEMPTS) {
+          await response.body?.cancel().catch(() => undefined)
+          await sleep(
+            retryDelayMs(attempt, parseRetryAfter(response.headers.get('retry-after')))
+          )
+          continue
+        }
+        const retried = attempt > 0 ? `（已重试 ${attempt} 次）` : ''
+        throw new Error(`Buckler HTTP ${response.status}${retried}`)
+      }
+      if (/login|signin|sign-in/i.test(response.url)) {
+        throw new Error('登录态失效，请重新登录')
+      }
+
+      const html = await response.text()
+      if (
+        /performing security verification|security service to protect|verif(y|ying) (that )?you are (a )?human/i.test(
+          html
+        )
+      ) {
+        throw new Error('Cloudflare 人机验证拦截，请重新登录')
+      }
+      if (/"page":"[^"]*(?:auth|login|signin)[^"]*"/i.test(html)) {
+        throw new Error('登录态失效，请重新登录')
+      }
+
+      const data = extractNextData(html)
+      if (!data) {
+        throw new Error('页面结构变化：未找到 __NEXT_DATA__，请检查 Buckler 是否改版')
+      }
+      return data
     }
 
-    const html = await response.text()
-    if (
-      /performing security verification|security service to protect|verif(y|ying) (that )?you are (a )?human/i.test(
-        html
-      )
-    ) {
-      throw new Error('Cloudflare 人机验证拦截，请重新登录')
-    }
-    if (/"page":"[^"]*(?:auth|login|signin)[^"]*"/i.test(html)) {
-      throw new Error('登录态失效，请重新登录')
-    }
-
-    const data = extractNextData(html)
-    if (!data) {
-      throw new Error('页面结构变化：未找到 __NEXT_DATA__，请检查 Buckler 是否改版')
-    }
-    return data
+    throw new Error('Buckler 请求失败')
   }
 
   private async fetchPage(

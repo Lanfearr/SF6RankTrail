@@ -19,6 +19,7 @@ const api: IpcApi = {
   rivalStats: (shortId, limit) => ipcRenderer.invoke('stats:rivals', shortId, limit),
   diagnostics: (shortId) => ipcRenderer.invoke('diagnostics:get', shortId),
   refreshSession: (shortId) => ipcRenderer.invoke('session:refresh', shortId),
+  rescanHistory: (shortId) => ipcRenderer.invoke('sync:rescan', shortId),
   syncStart: () => ipcRenderer.invoke('sync:start'),
   syncStop: () => ipcRenderer.invoke('sync:stop'),
   syncStatus: () => ipcRenderer.invoke('sync:status'),

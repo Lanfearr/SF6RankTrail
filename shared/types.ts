@@ -133,6 +133,10 @@ export interface SyncResult {
   shortId: string
   fetched: number
   inserted: number
+  fullScan?: boolean
+  fullScanError?: string
+  oldestFetchedAt?: number
+  newestFetchedAt?: number
 }
 
 export interface SyncStartResult {
@@ -254,6 +258,7 @@ export interface IpcApi {
   rivalStats: (shortId: string, limit?: number) => Promise<RivalStat[]>
   diagnostics: (shortId: string) => Promise<Diagnostics>
   refreshSession: (shortId: string) => Promise<SessionSummary | null>
+  rescanHistory: (shortId: string) => Promise<SyncResult>
   syncStart: () => Promise<SyncStartResult>
   syncStop: () => Promise<void>
   syncStatus: () => Promise<SyncStatus>

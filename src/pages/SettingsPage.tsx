@@ -242,7 +242,7 @@ export function SettingsPage() {
               checked={autoBackup}
               onChange={(event) => void applyAutoBackup(event.target.checked)}
             />
-            <span>每 6 小时自动备份数据库</span>
+            <span>每 24 小时自动备份数据库</span>
           </label>
           <p className="muted small">保留最近 14 份，保存在应用数据目录的 backups 文件夹。</p>
           <div className="button-row">

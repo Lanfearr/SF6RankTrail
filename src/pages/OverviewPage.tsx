@@ -83,6 +83,8 @@ export function OverviewPage() {
 
   useEffect(() => {
     setCharacter('all')
+    setMatches([])
+    setSeries({ MR: [], LP: [] })
   }, [shortId])
 
   const rangeBounds = useMemo<{ from: number | null; to: number | null }>(() => {
@@ -312,7 +314,7 @@ export function OverviewPage() {
                 />
               </label>
             </div>
-            {loading ? (
+            {loading && chartPoints.length === 0 ? (
               <LoadingBlock />
             ) : chartError ? (
               <EmptyState title="图表加载失败" detail={chartError} />
@@ -327,6 +329,8 @@ export function OverviewPage() {
                   kind={kind}
                   matches={filteredMatches}
                   deltas={ratingDeltas}
+                  xAxisMode="date"
+                  showZoomSlider
                 />
               </div>
             )}

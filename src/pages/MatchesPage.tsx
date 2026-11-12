@@ -4,6 +4,7 @@ import { CharacterIcon } from '../components/CharacterIcon'
 import { EmptyState, LoadingBlock, PageHeader } from '../components/Page'
 import { formatDelta } from '../lib/format'
 import { buildRatingDeltas } from '../lib/ratings'
+import { useAppStore } from '../store/useAppStore'
 
 const PAGE_SIZE = 20
 
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export function MatchesPage({ shortId, onSelectMatch }: Props) {
+  const lastEvent = useAppStore((state) => state.lastEvent)
   const [kind, setKind] = useState<RatingKind>('MR')
   const [result, setResult] = useState<MatchResult | 'all'>('all')
   const [character, setCharacter] = useState('all')
@@ -31,7 +33,7 @@ export function MatchesPage({ shortId, onSelectMatch }: Props) {
       return
     }
     void window.api.characterStats(shortId).then(setCharacters)
-  }, [shortId])
+  }, [shortId, lastEvent])
 
   useEffect(() => {
     if (!shortId) {
@@ -39,7 +41,7 @@ export function MatchesPage({ shortId, onSelectMatch }: Props) {
       return
     }
     void window.api.ratingSeries({ shortId, kind }).then(setSeries)
-  }, [shortId, kind])
+  }, [shortId, kind, lastEvent])
 
   useEffect(() => {
     setPage(0)
@@ -77,7 +79,7 @@ export function MatchesPage({ shortId, onSelectMatch }: Props) {
     return () => {
       cancelled = true
     }
-  }, [shortId, kind, result, character, fromDate, toDate, page])
+  }, [shortId, kind, result, character, fromDate, toDate, page, lastEvent])
 
   const deltas = useMemo(() => buildRatingDeltas(series), [series])
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))

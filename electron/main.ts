@@ -22,6 +22,7 @@ import type {
   PlayerInput,
   RatingPoint,
   RatingQuery,
+  SyncResult,
   SyncStartResult,
   SyncStatus
 } from '../shared/types'
@@ -43,7 +44,7 @@ const OVERLAY_PORT = 8765
 const SYNC_INTERVAL_MS = 20_000
 const MINI_SIZE = { width: 440, height: 340 }
 const PRO_SIZE = { width: 960, height: 660 }
-const AUTO_BACKUP_INTERVAL_MS = 6 * 60 * 60 * 1000
+const AUTO_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000
 const AUTO_BACKUP_RETENTION = 14
 
 let mainWindow: BrowserWindow | null = null
@@ -656,6 +657,17 @@ function registerIpc(): void {
       startSync()
     }
     return session
+  })
+
+  ipcMain.handle('sync:rescan', async (_event, shortId: string): Promise<SyncResult> => {
+    if (!repo.listPlayers().some((player) => player.shortId === shortId)) {
+      throw new Error('账号未追踪，无法重新扫描')
+    }
+    if (!syncService) {
+      const started = startSync()
+      if (!started.ok) throw new Error(started.message ?? '同步服务未启动')
+    }
+    return syncService!.rescan(shortId)
   })
 
   ipcMain.handle('sync:start', async (): Promise<SyncStartResult> => startSync())

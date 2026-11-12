@@ -4,9 +4,30 @@ import { DatabaseSync } from 'node:sqlite'
 import { Repository } from '../electron/db/repository'
 import { SyncService, type SyncResult } from '../electron/collector/sync-service'
 import type { MatchSource } from '../electron/collector/fetcher'
+import { RateLimiter } from '../electron/collector/rate-limiter'
+import { isRetryableStatus, parseRetryAfter, retryDelayMs } from '../electron/collector/retry'
 import type { Match, ServerEvent } from '../shared/types'
 
 const main = async (): Promise<void> => {
+  assert.equal(isRetryableStatus(502), true)
+  assert.equal(isRetryableStatus(429), true)
+  assert.equal(isRetryableStatus(403), false)
+  assert.equal(isRetryableStatus(404), false)
+  assert.equal(parseRetryAfter('2'), 2_000)
+  assert.equal(parseRetryAfter('not-a-date'), null)
+  assert.equal(retryDelayMs(0, null, () => 0), 1_000)
+  assert.equal(retryDelayMs(1, null, () => 0), 2_000)
+  assert.equal(retryDelayMs(0, 5_000, () => 0), 5_000)
+  assert.equal(retryDelayMs(5, 60_000, () => 0), 15_000)
+
+  const limiter = new RateLimiter({ minIntervalMs: 0, maxBackoffMs: 20 })
+  assert.equal(limiter.failure(), 20)
+  const waitStart = Date.now()
+  await limiter.acquire()
+  assert.equal(Date.now() - waitStart >= 10, true, 'acquire must honor failure backoff')
+  limiter.success()
+  assert.equal(limiter.currentBackoff, 0)
+
   const db = new DatabaseSync(':memory:')
   db.exec(readFileSync('electron/db/schema.sql', 'utf8'))
   const repo = new Repository(db)
@@ -180,6 +201,102 @@ const main = async (): Promise<void> => {
   await emptySource.sync('SELF')
   assert.equal(events.filter((event) => event.type === 'sync:warning').length, 1)
 
+  repo.upsertPlayer({ shortId: 'PAGING', cfn: 'Paging' })
+  const pagingMatches = Array.from({ length: 7 }, (_, index) => ({
+    ...makeMatch(200 + index, 'win', 1900 + index),
+    shortId: 'PAGING'
+  }))
+  for (const match of pagingMatches.slice(0, 4)) repo.insertMatch(match)
+
+  const pageRows = [
+    [pagingMatches[6], pagingMatches[5]],
+    [pagingMatches[4], pagingMatches[3]],
+    [pagingMatches[2], pagingMatches[1]],
+    [pagingMatches[0]]
+  ]
+  const pagingService = new SyncService(
+    repo,
+    {
+      async fetchMatches(_shortId, page = 1) {
+        return pageRows[page - 1] ?? []
+      }
+    },
+    () => undefined,
+    () => undefined
+  )
+  const pagingResult = await pagingService.sync('PAGING')
+  assert.equal(pagingResult.inserted, 3, 'new matches crossing a page boundary must all be imported')
+  assert.equal(pagingResult.fetched, 6)
+  assert.equal(repo.listMatches({ shortId: 'PAGING' }).length, 7)
+
+  repo.upsertPlayer({ shortId: 'RECONCILE', cfn: 'Reconcile' })
+  const reconcileMatches = Array.from({ length: 3 }, (_, index) => ({
+    ...makeMatch(300 + index, 'win', 2100 + index),
+    shortId: 'RECONCILE'
+  }))
+  repo.insertMatch(reconcileMatches[0])
+  repo.insertMatch(reconcileMatches[1])
+  let reconcileFullCalls = 0
+  const reconcileService = new SyncService(
+    repo,
+    {
+      async fetchMatches() {
+        return [...reconcileMatches].reverse()
+      },
+      async fetchAllMatches() {
+        reconcileFullCalls += 1
+        return [...reconcileMatches].reverse()
+      }
+    },
+    () => undefined,
+    () => undefined
+  )
+  const reconcileFirst = await reconcileService.sync('RECONCILE')
+  assert.equal(reconcileFirst.fullScan, true)
+  assert.equal(reconcileFirst.inserted, 1, 'full scan must repair a missing historical match')
+  assert.equal(reconcileFullCalls, 1)
+  assert.equal(repo.getSetting('lastFullScanAt:RECONCILE') !== null, true)
+
+  const reconcileSecond = await reconcileService.sync('RECONCILE')
+  assert.equal(reconcileSecond.fullScan, false, 'fresh full scan should reuse incremental sync')
+  assert.equal(reconcileSecond.inserted, 0)
+  assert.equal(reconcileFullCalls, 1)
+  assert.equal(repo.listMatches({ shortId: 'RECONCILE' }).length, 3)
+
+  const reconcileRescan = await reconcileService.rescan('RECONCILE')
+  assert.equal(reconcileRescan.fullScan, true, 'manual rescan must force a full scan')
+  assert.equal(reconcileFullCalls, 2)
+  assert.equal(reconcileRescan.inserted, 0)
+
+  repo.upsertPlayer({ shortId: 'SCANFAIL', cfn: 'ScanFail' })
+  const scanFailMatches = Array.from({ length: 2 }, (_, index) => ({
+    ...makeMatch(400 + index, 'win', 2200 + index),
+    shortId: 'SCANFAIL'
+  }))
+  repo.insertMatch(scanFailMatches[0])
+  let scanFailFullCalls = 0
+  const scanFailService = new SyncService(
+    repo,
+    {
+      async fetchMatches() {
+        return [...scanFailMatches].reverse()
+      },
+      async fetchAllMatches() {
+        scanFailFullCalls += 1
+        throw new Error('Buckler HTTP 502')
+      }
+    },
+    () => undefined,
+    () => undefined
+  )
+  const scanFailResult = await scanFailService.sync('SCANFAIL')
+  assert.equal(scanFailResult.fullScan, false)
+  assert.equal(scanFailResult.fullScanError, 'Buckler HTTP 502')
+  assert.equal(scanFailResult.inserted, 1, 'incremental fallback should still import new matches')
+  assert.equal(scanFailResult.oldestFetchedAt, scanFailMatches[0].playedAt)
+  assert.equal(scanFailResult.newestFetchedAt, scanFailMatches[1].playedAt)
+  assert.equal(scanFailFullCalls, 1)
+
   repo.upsertPlayer({ shortId: 'BACKFILL', cfn: 'Backfill' })
   const backfillFeed = Array.from({ length: 12 }, (_, index) => ({
     ...makeMatch(120 + index, 'win', 2000 + index),
@@ -206,7 +323,11 @@ const main = async (): Promise<void> => {
   )
   const backfillResult = await backfillService.sync('BACKFILL')
   assert.equal(backfillResult.inserted, 12)
+  assert.equal(backfillResult.fullScan, true)
   assert.equal(fetchAllCalls, 1)
+  assert.equal(backfillResult.oldestFetchedAt, backfillFeed[0].playedAt)
+  assert.equal(backfillResult.newestFetchedAt, backfillFeed[backfillFeed.length - 1].playedAt)
+  assert.equal(repo.getSetting('lastFullScanAt:BACKFILL') !== null, true)
   assert.equal(
     repo.listPlayers().find((player) => player.shortId === 'BACKFILL')?.displayName,
     '回填昵称'

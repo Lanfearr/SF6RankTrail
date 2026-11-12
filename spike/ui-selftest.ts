@@ -288,6 +288,14 @@ const main = async (): Promise<void> => {
       await window.locator('.overview-chart-panel .chart-wrap').getAttribute('data-point-count'),
       '5'
     )
+    assert.equal(
+      await window.locator('.overview-chart-panel .chart-wrap').getAttribute('data-axis-mode'),
+      'date'
+    )
+    assert.equal(
+      await window.locator('.overview-chart-panel .chart-wrap').getAttribute('data-zoom-slider'),
+      'true'
+    )
 
     await window.click('.nav-item:has-text("会话历史")')
     await window.waitForSelector('.session-table .stats-table-row', { timeout: 5_000 })
@@ -516,6 +524,55 @@ const main = async (): Promise<void> => {
     await chart.waitForSelector('.mini', { timeout: 5_000 })
     assert.equal(await chart.isVisible('.pro'), false)
 
+    await window.click('.nav-item:has-text("概览")')
+    await window.waitForFunction(
+      () =>
+        document
+          .querySelector('.overview-chart-panel .chart-wrap')
+          ?.getAttribute('data-point-count') === '5',
+      undefined,
+      { timeout: 8_000 }
+    )
+    const overviewChartBox = await window.locator('.overview-chart-panel .chart').boundingBox()
+    if (!overviewChartBox) throw new Error('overview chart box missing')
+    await window.mouse.move(
+      overviewChartBox.x + overviewChartBox.width * 0.55,
+      overviewChartBox.y + overviewChartBox.height * 0.45
+    )
+    await window.mouse.wheel(0, -600)
+    await window.mouse.wheel(0, -600)
+    await window.waitForFunction(
+      () =>
+        Number(
+          document
+            .querySelector('.overview-chart-panel .chart-wrap')
+            ?.getAttribute('data-icon-count')
+        ) < 5,
+      undefined,
+      { timeout: 5_000 }
+    )
+    const overviewZoomedIconCount = Number(
+      await window.locator('.overview-chart-panel .chart-wrap').getAttribute('data-icon-count')
+    )
+
+    await window.click('.page-actions button:has-text("刷新本次会话")')
+    await window.waitForFunction(
+      () =>
+        Array.from(document.querySelectorAll('.kv-list strong')).some(
+          (node) => node.textContent === '已开始新的本次会话'
+        ),
+      undefined,
+      { timeout: 5_000 }
+    )
+    await window.waitForTimeout(800)
+    assert.equal(
+      Number(
+        await window.locator('.overview-chart-panel .chart-wrap').getAttribute('data-icon-count')
+      ),
+      overviewZoomedIconCount,
+      'overview chart zoom should survive refresh'
+    )
+
     await window.selectOption('.account-select select', bulkId)
     await chart.click('button:has-text("Pro")')
     await chart.waitForSelector('.pro', { timeout: 5_000 })
@@ -530,6 +587,7 @@ const main = async (): Promise<void> => {
     assert.equal(statsText.includes('最近场次'), true)
     assert.equal(statsText.includes('20 场'), true)
     assert.equal(await chart.locator('.chart-wrap').getAttribute('data-series-count'), '1')
+    assert.equal(await chart.locator('.chart-wrap').getAttribute('data-zoom-slider'), 'false')
 
     const overlay = await window.evaluate(async () => {
       const response = await fetch('http://127.0.0.1:8765/overlay')

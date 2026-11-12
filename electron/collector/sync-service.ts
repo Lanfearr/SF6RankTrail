@@ -7,13 +7,44 @@ export interface SyncResult {
   shortId: string
   fetched: number
   inserted: number
+  fullScan?: boolean
+  fullScanError?: string
+  oldestFetchedAt?: number
+  newestFetchedAt?: number
 }
 
 const BULK_THRESHOLD = 10
 const MAX_INCREMENTAL_PAGES = 50
 const PAGE_DELAY_MS = 400
+const FULL_SCAN_INTERVAL_MS = 60 * 60 * 1000
+const FULL_SCAN_RETRY_MS = 5 * 60 * 1000
+
+type MatchRange = {
+  oldestFetchedAt?: number
+  newestFetchedAt?: number
+}
+
+type RecentMatches = MatchRange & {
+  matches: Match[]
+  fetched: number
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+const matchRange = (matches: Match[]): MatchRange => {
+  let oldestFetchedAt: number | undefined
+  let newestFetchedAt: number | undefined
+  for (const match of matches) {
+    if (!Number.isFinite(match.playedAt)) continue
+    if (oldestFetchedAt === undefined || match.playedAt < oldestFetchedAt) {
+      oldestFetchedAt = match.playedAt
+    }
+    if (newestFetchedAt === undefined || match.playedAt > newestFetchedAt) {
+      newestFetchedAt = match.playedAt
+    }
+  }
+  return { oldestFetchedAt, newestFetchedAt }
+}
 
 export class SyncService {
   private poller: Poller | null = null
@@ -21,6 +52,8 @@ export class SyncService {
   private readonly zeroStreak = new Map<string, number>()
   private readonly failed = new Set<string>()
   private readonly currentFailed = new Set<string>()
+  private readonly fullScanRetryAt = new Map<string, number>()
+  private readonly syncQueues = new Map<string, Promise<SyncResult>>()
 
   constructor(
     private readonly repo: Repository,
@@ -73,15 +106,45 @@ export class SyncService {
     return results
   }
 
-  async sync(shortId: string): Promise<SyncResult> {
-    const backfillKey = `backfill:${shortId}`
-    const needsBackfill =
-      Boolean(this.source.fetchAllMatches) && this.repo.getSetting(backfillKey) !== '1'
+  async sync(shortId: string, forceFullScan = false): Promise<SyncResult> {
+    const previous = this.syncQueues.get(shortId) ?? Promise.resolve()
+    const task = previous
+      .catch(() => undefined)
+      .then(() => this.runSync(shortId, forceFullScan))
+    this.syncQueues.set(shortId, task)
+    try {
+      return await task
+    } finally {
+      if (this.syncQueues.get(shortId) === task) this.syncQueues.delete(shortId)
+    }
+  }
 
-    let recent: { matches: Match[]; fetched: number }
-    if (needsBackfill) {
-      const all = await this.source.fetchAllMatches!(shortId)
-      recent = { matches: all, fetched: all.length }
+  async rescan(shortId: string): Promise<SyncResult> {
+    this.fullScanRetryAt.delete(shortId)
+    return this.sync(shortId, true)
+  }
+
+  private async runSync(shortId: string, forceFullScan: boolean): Promise<SyncResult> {
+    const fullScanKey = `lastFullScanAt:${shortId}`
+    const canFullScan = Boolean(this.source.fetchAllMatches)
+    const needsFullScan = canFullScan && (forceFullScan || this.shouldFullScan(shortId))
+
+    let recent: RecentMatches
+    let fullScanCompleted = false
+    let fullScanError: string | undefined
+    if (needsFullScan) {
+      try {
+        const all = await this.source.fetchAllMatches!(shortId)
+        if (all.length === 0 && this.repo.countMatches(shortId) > 0) {
+          throw new Error('完整扫描未返回对局')
+        }
+        recent = { matches: all, fetched: all.length, ...matchRange(all) }
+        fullScanCompleted = true
+      } catch (error) {
+        fullScanError = error instanceof Error ? error.message : String(error)
+        this.fullScanRetryAt.set(shortId, Date.now() + FULL_SCAN_RETRY_MS)
+        recent = await this.fetchRecent(shortId)
+      }
     } else {
       recent = await this.fetchRecent(shortId)
     }
@@ -90,7 +153,11 @@ export class SyncService {
     if (playerName) this.repo.setDisplayNameIfEmpty(shortId, playerName)
 
     const inserted = this.storeMatches(shortId, recent.matches)
-    if (needsBackfill) this.repo.setSetting(backfillKey, '1')
+    if (fullScanCompleted) {
+      this.repo.setSetting(fullScanKey, String(Date.now()))
+      this.repo.setSetting(`backfill:${shortId}`, '1')
+      this.fullScanRetryAt.delete(shortId)
+    }
 
     let currentRatings: RatingPoint[] = []
     if (this.source.fetchCurrentRatings) {
@@ -125,11 +192,30 @@ export class SyncService {
     }
 
     this.checkDataHealth(shortId, recent.fetched)
-    return { shortId, fetched: recent.fetched, inserted }
+    return {
+      shortId,
+      fetched: recent.fetched,
+      inserted,
+      fullScan: fullScanCompleted,
+      fullScanError,
+      oldestFetchedAt: recent.oldestFetchedAt,
+      newestFetchedAt: recent.newestFetchedAt
+    }
   }
 
-  private async fetchRecent(shortId: string): Promise<{ matches: Match[]; fetched: number }> {
+  private shouldFullScan(shortId: string): boolean {
+    const retryAt = this.fullScanRetryAt.get(shortId)
+    if (retryAt !== undefined && Date.now() < retryAt) return false
+
+    const raw = this.repo.getSetting(`lastFullScanAt:${shortId}`)
+    if (raw === null) return true
+    const lastScan = Number(raw)
+    return !Number.isFinite(lastScan) || Date.now() - lastScan >= FULL_SCAN_INTERVAL_MS
+  }
+
+  private async fetchRecent(shortId: string): Promise<RecentMatches> {
     const found = new Map<string, Match>()
+    const scanned = new Map<string, Match>()
     let previousSignature = ''
     let fetched = 0
 
@@ -144,19 +230,18 @@ export class SyncService {
       if (matches.length === 0) break
 
       fetched += matches.length
-      let pageHasExisting = false
+      let pageNew = 0
       for (const match of matches) {
-        if (this.repo.hasMatch(match.replayId)) {
-          pageHasExisting = true
-          continue
-        }
+        scanned.set(match.replayId, match)
+        if (this.repo.hasMatch(match.replayId)) continue
         found.set(match.replayId, match)
+        pageNew += 1
       }
-      if (pageHasExisting) break
+      if (pageNew === 0) break
       if (page < MAX_INCREMENTAL_PAGES) await sleep(PAGE_DELAY_MS)
     }
 
-    return { matches: [...found.values()], fetched }
+    return { matches: [...found.values()], fetched, ...matchRange([...scanned.values()]) }
   }
 
   private storeMatches(shortId: string, matches: Match[]): number {
