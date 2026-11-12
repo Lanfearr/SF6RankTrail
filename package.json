@@ -1,6 +1,6 @@
 {
   "name": "sf6scorer",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Real-time Street Fighter 6 LP/MR trend tracker with OBS overlay",
   "main": "./out/main/index.js",
   "private": true,
@@ -16,6 +16,7 @@
     "spike:m0": "tsx spike/m0.ts",
     "spike:selftest": "tsx spike/m0.ts --self-test",
     "spike:dbtest": "tsx spike/db-selftest.ts",
+    "spike:migtest": "tsx spike/migration-selftest.ts",
     "spike:m1test": "tsx spike/m1-selftest.ts",
     "spike:uitest": "tsx spike/ui-selftest.ts",
     "spike:netcheck": "electron spike/electron-fetch-check.cjs"

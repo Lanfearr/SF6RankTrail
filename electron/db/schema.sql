@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS players (
 );
 
 CREATE TABLE IF NOT EXISTS matches (
-  replay_id     TEXT PRIMARY KEY,
+  replay_id     TEXT NOT NULL,
   short_id      TEXT NOT NULL REFERENCES players(short_id),
   opponent_id   TEXT,
   my_char       TEXT,
@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS matches (
   opp_lp        INTEGER,
   played_at     INTEGER NOT NULL,
   season        TEXT,
-  created_at    INTEGER NOT NULL
+  created_at    INTEGER NOT NULL,
+  PRIMARY KEY (short_id, replay_id)
 );
 CREATE INDEX IF NOT EXISTS idx_matches_short_time
   ON matches(short_id, played_at DESC);
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   short_id      TEXT NOT NULL REFERENCES players(short_id),
   started_at    INTEGER NOT NULL,
   ended_at      INTEGER,
+  character     TEXT,
   start_rating  INTEGER,
   end_rating    INTEGER,
   start_lp      INTEGER,
@@ -55,6 +57,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS session_marks (
   short_id      TEXT PRIMARY KEY REFERENCES players(short_id),
   started_at    INTEGER NOT NULL,
+  character     TEXT,
   start_mr      INTEGER,
   start_lp      INTEGER,
   updated_at    INTEGER NOT NULL

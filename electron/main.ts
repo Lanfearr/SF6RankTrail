@@ -28,6 +28,7 @@ import type {
 } from '../shared/types'
 import type { Db } from './db/migrate'
 import { openDatabase } from './db/migrate'
+import schema from './db/schema.sql?raw'
 import { Repository } from './db/repository'
 import {
   closeActiveLogin,
@@ -65,7 +66,8 @@ let syncStatus: SyncStatus = { state: 'idle', at: Date.now() }
 let autoBackupTimer: ReturnType<typeof setInterval> | null = null
 const statusHistory: SyncStatus[] = []
 
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+const hasSingleInstanceLock =
+  process.env.SF6_SCORER_DISABLE_SINGLE_INSTANCE === '1' || app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) {
   app.quit()
 } else {
@@ -267,9 +269,18 @@ function readSyncInterval(): number {
   return Math.max(15_000, Math.min(120_000, raw))
 }
 
+function ensureSyncService(): SyncService | null {
+  if (syncService) return syncService
+  if (!hasSavedSession(sessionPath)) return null
+  source = new ElectronBucklerSource(sessionPath)
+  syncService = new SyncService(repo, source, (event) => hub?.broadcast(event), setStatus)
+  return syncService
+}
+
 async function stopSync(): Promise<void> {
-  syncService?.stop()
+  const service = syncService
   syncService = null
+  await service?.stop()
   await source?.close()
   source = null
 }
@@ -277,17 +288,19 @@ async function stopSync(): Promise<void> {
 function startSync(): SyncStartResult {
   const shortIds = trackedShortIds()
   if (shortIds.length === 0) {
+    void syncService?.stop()
     return { ok: false, players: 0, message: '没有追踪账号，请先登录或添加账号' }
   }
   if (!hasSavedSession(sessionPath)) {
+    void syncService?.stop()
     return { ok: false, players: shortIds.length, message: '未登录，请先完成 CAPCOM ID 登录' }
   }
 
-  syncService?.stop()
-  void source?.close()
-  source = new ElectronBucklerSource(sessionPath)
-  syncService = new SyncService(repo, source, (event) => hub?.broadcast(event), setStatus)
-  syncService.start(shortIds, readSyncInterval())
+  const service = ensureSyncService()
+  if (!service) {
+    return { ok: false, players: shortIds.length, message: '未登录，请先完成 CAPCOM ID 登录' }
+  }
+  service.start(shortIds, readSyncInterval())
   return { ok: true, players: shortIds.length }
 }
 
@@ -317,6 +330,7 @@ async function runLogin(input: PlayerInput): Promise<void> {
     repo.upsertPlayer({ shortId, cfn: input.cfn ?? shortId, isSelf: true })
     broadcastActivePlayer()
     setStatus({ state: 'idle', at: Date.now(), message: `登录成功：${shortId}` })
+    await stopSync()
     startSync()
   } catch (error) {
     setStatus({
@@ -653,9 +667,6 @@ function registerIpc(): void {
     if (!repo.listPlayers().some((player) => player.shortId === shortId)) return null
     const session = repo.startSession(shortId)
     hub.broadcast({ type: 'session:update', payload: session })
-    if (syncService?.isRunning() && hasSavedSession(sessionPath)) {
-      startSync()
-    }
     return session
   })
 
@@ -663,11 +674,9 @@ function registerIpc(): void {
     if (!repo.listPlayers().some((player) => player.shortId === shortId)) {
       throw new Error('账号未追踪，无法重新扫描')
     }
-    if (!syncService) {
-      const started = startSync()
-      if (!started.ok) throw new Error(started.message ?? '同步服务未启动')
-    }
-    return syncService!.rescan(shortId)
+    const service = ensureSyncService()
+    if (!service) throw new Error('未登录，请先完成 CAPCOM ID 登录')
+    return service.rescan(shortId)
   })
 
   ipcMain.handle('sync:start', async (): Promise<SyncStartResult> => startSync())
@@ -802,8 +811,10 @@ app.whenReady().then(async () => {
   sessionPath = join(app.getPath('userData'), 'session.json')
   profileDir = join(app.getPath('userData'), 'chrome-profile')
   dbPath = join(app.getPath('userData'), 'sf6scorer.db')
-  database = openDatabase(dbPath)
+  const opened = openDatabase(dbPath, schema)
+  database = opened.db
   repo = new Repository(database)
+  if (opened.migrated) repo.rebuildAllSessions()
   activeShortId = repo.getSetting('activeShortId')
   resolveActiveShortId()
   hub = new RealtimeHub()
@@ -849,7 +860,7 @@ app.on('before-quit', () => {
     clearInterval(autoBackupTimer)
     autoBackupTimer = null
   }
-  syncService?.stop()
+  void syncService?.stop()
   void source?.close()
   void closeActiveLogin()
   hub?.close()

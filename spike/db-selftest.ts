@@ -31,6 +31,14 @@ console.log('insert duplicate (should be false):', repo.insertMatch(match))
 console.log('matches:', repo.listMatches({ shortId: 'SELF' }))
 assert.equal(repo.listMatches({ shortId: 'SELF' })[0]?.oppLp, 11000)
 
+assert.throws(() => {
+  repo.transaction(() => {
+    repo.insertMatch({ ...match, replayId: 'rollback-1' })
+    throw new Error('rollback test')
+  })
+})
+assert.equal(repo.listMatches({ shortId: 'SELF' }).length, 1, 'transaction must roll back')
+
 const rating = repo.insertRating({
   shortId: 'SELF',
   character: 'Ryu',
@@ -136,8 +144,9 @@ const history = repo.listSessionHistory('SELF')
 assert.equal(history.length, 1)
 assert.equal(history[0]?.matches, 2)
 assert.equal(history[0]?.wins, 2)
+assert.equal(history[0]?.character, 'Ryu')
 assert.equal(history[0]?.startRating, 1800)
-assert.equal(history[0]?.endRating, 1830)
+assert.equal(history[0]?.endRating, null)
 
 const matchups = repo.getMatchupStats('SELF')
 assert.equal(matchups.length, 1)

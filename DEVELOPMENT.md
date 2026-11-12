@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS players (
 );
 
 CREATE TABLE IF NOT EXISTS matches (
-  replay_id     TEXT PRIMARY KEY,
+  replay_id     TEXT NOT NULL,
   short_id      TEXT NOT NULL REFERENCES players(short_id),
   opponent_id   TEXT,
   my_char       TEXT,
@@ -191,9 +191,11 @@ CREATE TABLE IF NOT EXISTS matches (
   my_mr         INTEGER,
   opp_mr        INTEGER,
   my_lp         INTEGER,
+  opp_lp        INTEGER,
   played_at     INTEGER NOT NULL,
   season        TEXT,
-  created_at    INTEGER NOT NULL
+  created_at    INTEGER NOT NULL,
+  PRIMARY KEY (short_id, replay_id)
 );
 CREATE INDEX IF NOT EXISTS idx_matches_short_time
   ON matches(short_id, played_at DESC);
@@ -216,6 +218,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   short_id      TEXT NOT NULL REFERENCES players(short_id),
   started_at    INTEGER NOT NULL,
   ended_at      INTEGER,
+  character     TEXT,
   start_rating  INTEGER,
   end_rating    INTEGER,
   start_lp      INTEGER,
@@ -225,6 +228,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS session_marks (
   short_id      TEXT PRIMARY KEY REFERENCES players(short_id),
   started_at    INTEGER NOT NULL,
+  character     TEXT,
   start_mr      INTEGER,
   start_lp      INTEGER,
   updated_at    INTEGER NOT NULL
@@ -238,14 +242,16 @@ CREATE TABLE IF NOT EXISTS settings (
 
 ### 5.2 去重与会话规则
 
-- 主键：`replay_id`，`INSERT OR IGNORE`。
+- 主键：`(short_id, replay_id)`，`INSERT OR IGNORE`；不同账号可以使用相同 Replay ID。
 - 会话边界：相邻对局时间差 ≥ 3 小时 → 新 session。
-- 手动会话：用户在 UI 点击刷新时写入 `session_marks`，记录点击时的最新 MR/LP 基线；统计 `played_at >= started_at` 的对局，并优先于自动会话展示。
+- 手动会话：用户在 UI 点击刷新时写入 `session_marks`，记录点击时的最新 MR/LP 基线和角色；统计 `played_at >= started_at` 的对局，并优先于自动会话展示。
+- 会话角色：取该会话最后一场非空 `my_char`；结束分数只取该角色在 `ended_at` 之后的第一条评分（下一场赛前分或后续快照），没有观测则显示 `—`，不再用最后一场赛前分冒充结束分。
 - 对战记录中的 `my_mr` / `my_lp` 是**比赛开始前分数**，不是赛后分数；历史评分点仍按该值入库。
 - 当前分数从个人资料页 `character_league_infos[*].league_info` 获取，写入 `source = 'snapshot'`；未变化且最新比赛后已有快照时不重复写入，新比赛后同值也会补快照。
 - 增量计算：同角色按时间排序后，用“下一场赛前分数 - 本场赛前分数”作为本场增减；最新一场使用“当前快照 - 最新赛前分数”。缺失时用 Elo 估算并置 `estimated = 1`。
-- 最新自动会话与手动会话的结束分数均优先使用当前快照，避免会话累计少算最新一场。
+- 写入原子性：`matches`、`rating_points` 当前评分和同步事件在同一事务内提交；事件只在事务成功后广播。
 - LP 与 MR 独立，不做互相换算。
+- 迁移：`PRAGMA user_version = 1`；旧库先备份到 `userData/backups/pre-migration-v1-*.db`，再重建 `matches` 复合主键并补充会话角色字段，随后重建全部自动会话。
 
 ---
 
@@ -297,7 +303,7 @@ CREATE TABLE IF NOT EXISTS settings (
 - 登录：`loginWithChrome()` 启动普通 Chrome（独立 profile + 动态调试端口），等待用户手动登录；通过 `__NEXT_DATA__` 的 `loginUser.flg`、退出文案与 `/profile/{id}/` 链接识别登录成功，随后通过 `connectOverCDP` 读取 Cookie、UA 与 UA-CH，保存 `session.json` 并关闭 Chrome。
 - 采集：`ElectronBucklerSource` 把 `session.json` 的 Cookie 导入 Electron session，使用 `session.fetch` 打开 `battlelog/rank`，解析 `__NEXT_DATA__`；全程无可见窗口。
 - 分页：首次同步按页抓取全部可查询场次（读取 `total_page`，遇到空页/重复页停止，上限 200 页），完成后记录 `lastFullScanAt:<shortId>` 与 `backfill:<shortId>`；后续轮询从第 1 页增量抓取，只有在整页都没有新增场次时才停止，并继续多扫描一页作为边界缓冲。启动时及运行中每 1 小时执行一次全量核对，补齐分页边界或延迟上传的遗漏；全量失败时回退增量同步，5 分钟后重试。手动重扫强制全量检查当前账号，返回 `fullScanError`、`oldestFetchedAt`、`newestFetchedAt`；诊断页用右下角浮动提示展示扫描中/成功/无新增/失败状态，最终结果 10 秒后自动关闭，也可手动关闭。Buckler 只公开最近约 100 场（10 页），超出窗口的历史无法重新抓取。批量回填只推送最新一条评分事件，避免 UI 抖动。对局时间取自 `uploaded_at`（Unix 秒）；昵称取自 `fighter_banner_info.personal_info.fighter_id`，仅在 `display_name` 为空时自动补全；单个账号抓取失败只发 `sync:warning`，不阻塞其他账号。
-- 同步：`SyncService` 每 20s 拉取一次，按 `replay_id` 去重；新对局写入 `matches` 与 `rating_points`，并重建 `sessions`。
+- 同步：`SyncService` 每 20s 拉取一次，按 `(short_id, replay_id)` 去重；新对局、评分和当前评分在同一事务内写入 `matches` 与 `rating_points`，提交后广播事件并重建 `sessions`。手动重扫只创建同步服务、不启动全账号轮询；停止同步时等待在途队列结束。
 - 当前分数：每轮同步比赛后额外抓取资料页，解析 `character_league_infos` 的 MR/LP，写入 `rating_points(source='snapshot')`；抓取失败只发一次 `当前分数获取失败` 告警，不阻塞对局同步。
 - 推送：新对局/评分/会话通过 `RealtimeHub` 广播；同步状态同时写入快照。
 - 账号：`auth:login` 异步执行登录并在成功后自动启动同步；`players:add` 可附带昵称，`players:remove` 删除账号及其对局/评分/会话数据，增删后自动重启同步。
@@ -436,6 +442,7 @@ type ServerEvent =
     "spike:m0": "tsx spike/m0.ts",
     "spike:selftest": "tsx spike/m0.ts --self-test",
     "spike:dbtest": "tsx spike/db-selftest.ts",
+    "spike:migtest": "tsx spike/migration-selftest.ts",
     "spike:m1test": "tsx spike/m1-selftest.ts",
     "spike:uitest": "tsx spike/ui-selftest.ts",
     "spike:netcheck": "electron spike/electron-fetch-check.cjs"
@@ -449,6 +456,7 @@ type ServerEvent =
 # 1) 解析器 / 数据库 / 同步逻辑自检（无需网络）
 npm run spike:selftest
 npm run spike:dbtest
+npm run spike:migtest
 npm run spike:m1test
 npm run spike:uitest   # 校验主窗口页面、图表弹窗、最近 20 场、账号联动与 overlay
 
@@ -532,6 +540,7 @@ npm run spike:m0 -- --short-id <Buckler_ID> --channel chrome --dump
 | 2026-11-09 | A 组增强       | 新增会话历史、目标与趋势（目标 MR/LP、连胜、12 周热力图）、对手分析（角色 matchup + 宿敌）；JSON 备份恢复；自动备份（每 6 小时、保留 14 份）；Repository/IPC/UI 自测同步更新 |
 | 2026-11-11 | 概览图表/排序  | 概览页新增全量趋势图，横轴为日期，支持 MR/LP、角色、预设/自定义日期筛选与缩放，图表下方新增缩放条；对手分析表头可排序；新增公共图表点构建函数；自动备份默认间隔改为 24 小时；版本升至 0.1.3，自测覆盖图表与排序 |
 | 2026-11-12 | 重扫反馈       | 手动重扫仅针对当前账号；诊断页新增浮动提示，展示扫描中/成功/无新增/失败、扫描场次与时间范围，最终结果 10 秒自动关闭并可手动关闭；同步结果新增完整扫描错误与时间范围；补充分页/失败回退/重扫测试及 Buckler 100 场窗口说明 |
+| 2026-11-12 | 数据正确性     | 版本升至 0.1.5；`matches` 改为 `(short_id, replay_id)` 复合主键并新增 v1 迁移备份；会话按最后一场角色计算，结束分仅用赛后观测，缺失显示 `—`；对局/评分/当前分数事务化；单账号重扫不再启动全账号轮询，停止同步等待队列；新增迁移/复合主键/事务回滚测试 |
 
 ---
 

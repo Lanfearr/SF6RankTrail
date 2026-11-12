@@ -256,7 +256,10 @@ const main = async (): Promise<void> => {
   })
   seed.close()
 
-  const app = await electron.launch({ args: ['.', `--user-data-dir=${userData}`] })
+  const app = await electron.launch({
+    args: ['.', `--user-data-dir=${userData}`],
+    env: { ...process.env, SF6_SCORER_DISABLE_SINGLE_INSTANCE: '1' }
+  })
   try {
     const window = await app.firstWindow()
     await window.waitForSelector('.main-shell', { timeout: 15_000 })

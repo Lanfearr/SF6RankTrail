@@ -112,7 +112,7 @@ const main = async (): Promise<void> => {
 
   const latestAfter = repo.getLatestSession('SELF')
   assert.equal(latestAfter?.matches, 2)
-  assert.equal(latestAfter?.ratingDelta, 1820 - 1830)
+  assert.equal(latestAfter?.ratingDelta, null, 'no post-session rating means no end rating')
 
   const manualAfter = repo.getManualSession('SELF')
   assert.equal(manualAfter?.matches, 2)
@@ -150,7 +150,7 @@ const main = async (): Promise<void> => {
   const lpDashboard = repo.getDashboard('LPUSER')
   assert.equal(lpDashboard?.latestLp?.value, 12100)
   assert.equal(lpDashboard?.latestMr, null)
-  assert.equal(lpDashboard?.session?.lpDelta, 100)
+  assert.equal(lpDashboard?.session?.lpDelta, null)
   assert.equal(repo.listDashboards().length, 2)
 
   repo.upsertPlayer({ shortId: 'CURRENTUSER', cfn: 'CurrentUser' })
@@ -360,7 +360,7 @@ const main = async (): Promise<void> => {
   while (goodCalls === 0 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
-  mixedService.stop()
+  await mixedService.stop()
   assert.equal(goodCalls > 0, true, 'one failing account must not block other accounts')
   assert.equal(
     mixedEvents.filter((event) => event.type === 'sync:warning').length,

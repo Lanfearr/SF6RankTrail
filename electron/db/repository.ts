@@ -58,6 +58,7 @@ interface SessionRow {
   short_id: string
   started_at: number
   ended_at: number | null
+  character: string | null
   start_rating: number | null
   end_rating: number | null
   start_lp: number | null
@@ -66,6 +67,7 @@ interface SessionRow {
 
 interface MatchTimeRow {
   played_at: number
+  my_char: string | null
   my_mr: number | null
   my_lp: number | null
 }
@@ -73,6 +75,7 @@ interface MatchTimeRow {
 interface SessionMarkRow {
   short_id: string
   started_at: number
+  character: string | null
   start_mr: number | null
   start_lp: number | null
   updated_at: number
@@ -132,6 +135,22 @@ const toRating = (row: RatingRow): RatingPoint => ({
 
 export class Repository {
   constructor(private readonly db: Db) {}
+
+  transaction<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE;')
+    try {
+      const result = fn()
+      this.db.exec('COMMIT;')
+      return result
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK;')
+      } catch {
+        // preserve the original error
+      }
+      throw error
+    }
+  }
 
   upsertPlayer(input: {
     shortId: string
@@ -316,8 +335,10 @@ export class Repository {
     }
   }
 
-  hasMatch(replayId: string): boolean {
-    const row = this.db.prepare('SELECT 1 AS ok FROM matches WHERE replay_id = ?').get(replayId)
+  hasMatch(shortId: string, replayId: string): boolean {
+    const row = this.db
+      .prepare('SELECT 1 AS ok FROM matches WHERE short_id = ? AND replay_id = ?')
+      .get(shortId, replayId)
     return Boolean(row)
   }
 
@@ -456,7 +477,7 @@ export class Repository {
   rebuildSessions(shortId: string): void {
     const rows = this.db
       .prepare(
-        'SELECT played_at, my_mr, my_lp FROM matches WHERE short_id = ? ORDER BY played_at ASC'
+        'SELECT played_at, my_char, my_mr, my_lp FROM matches WHERE short_id = ? ORDER BY played_at ASC'
       )
       .all(shortId) as unknown as MatchTimeRow[]
     const idleMs = this.getSessionIdleMs()
@@ -466,29 +487,40 @@ export class Repository {
       this.db.prepare('DELETE FROM sessions WHERE short_id = ?').run(shortId)
       const insert = this.db.prepare(
         `INSERT INTO sessions
-          (short_id, started_at, ended_at, start_rating, end_rating, start_lp, end_lp)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+          (short_id, started_at, ended_at, character, start_rating, end_rating, start_lp, end_lp)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
 
       let current: {
         start: number
         end: number
-        startRating: number | null
-        endRating: number | null
-        startLp: number | null
-        endLp: number | null
+        lastCharacter: string | null
       } | null = null
 
       const flush = (): void => {
         if (!current) return
+        const character = current.lastCharacter
+        const startRating = character
+          ? this.getFirstMatchRating(shortId, character, current.start, current.end, 'MR')
+          : null
+        const startLp = character
+          ? this.getFirstMatchRating(shortId, character, current.start, current.end, 'LP')
+          : null
+        const endRating = character
+          ? this.getFirstRatingAfter(shortId, 'MR', character, current.end)
+          : null
+        const endLp = character
+          ? this.getFirstRatingAfter(shortId, 'LP', character, current.end)
+          : null
         insert.run(
           shortId,
           current.start,
           current.end,
-          current.startRating,
-          current.endRating,
-          current.startLp,
-          current.endLp
+          character,
+          startRating,
+          endRating,
+          startLp,
+          endLp
         )
         current = null
       }
@@ -499,15 +531,11 @@ export class Repository {
           current = {
             start: row.played_at,
             end: row.played_at,
-            startRating: row.my_mr,
-            endRating: row.my_mr,
-            startLp: row.my_lp,
-            endLp: row.my_lp
+            lastCharacter: row.my_char
           }
         } else {
           current.end = row.played_at
-          if (row.my_mr !== null) current.endRating = row.my_mr
-          if (row.my_lp !== null) current.endLp = row.my_lp
+          if (row.my_char !== null) current.lastCharacter = row.my_char
         }
       }
 
@@ -517,6 +545,49 @@ export class Repository {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  rebuildAllSessions(): void {
+    for (const player of this.listPlayers()) {
+      this.rebuildSessions(player.shortId)
+    }
+  }
+
+  private getFirstMatchRating(
+    shortId: string,
+    character: string,
+    from: number,
+    to: number,
+    kind: RatingPoint['kind']
+  ): number | null {
+    const column = kind === 'MR' ? 'my_mr' : 'my_lp'
+    const row = this.db
+      .prepare(
+        `SELECT ${column} AS value FROM matches
+         WHERE short_id = ? AND my_char = ? AND played_at >= ? AND played_at <= ?
+           AND ${column} IS NOT NULL
+         ORDER BY played_at ASC
+         LIMIT 1`
+      )
+      .get(shortId, character, from, to) as { value: number } | undefined
+    return row?.value ?? null
+  }
+
+  private getFirstRatingAfter(
+    shortId: string,
+    kind: RatingPoint['kind'],
+    character: string,
+    after: number
+  ): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT value FROM rating_points
+         WHERE short_id = ? AND kind = ? AND character = ? AND observed_at > ?
+         ORDER BY observed_at ASC
+         LIMIT 1`
+      )
+      .get(shortId, kind, character, after) as { value: number } | undefined
+    return row?.value ?? null
   }
 
   listSessions(shortId: string): SessionSummary[] {
@@ -546,7 +617,7 @@ export class Repository {
     if (!row) return null
 
     const session = this.toSessionSummary(row)
-    const character = this.getLatestMatchCharacter(shortId)
+    const character = row.character ?? this.getLatestMatchCharacter(shortId)
     if (!character || row.ended_at === null) return session
 
     const latestMr = this.getLatestRating(shortId, 'MR', character)
@@ -573,15 +644,17 @@ export class Repository {
     const lp = this.getLatestRating(shortId, 'LP', character) ?? this.getLatestRating(shortId, 'LP')
     this.db
       .prepare(
-        `INSERT INTO session_marks (short_id, started_at, start_mr, start_lp, updated_at)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO session_marks
+           (short_id, started_at, character, start_mr, start_lp, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(short_id) DO UPDATE SET
            started_at = excluded.started_at,
+           character = excluded.character,
            start_mr = excluded.start_mr,
            start_lp = excluded.start_lp,
            updated_at = excluded.updated_at`
       )
-      .run(shortId, at, mr?.value ?? null, lp?.value ?? null, Date.now())
+      .run(shortId, at, character, mr?.value ?? null, lp?.value ?? null, Date.now())
 
     const session = this.getManualSession(shortId)
     if (!session) throw new Error(`session not found after start: ${shortId}`)
@@ -618,22 +691,52 @@ export class Repository {
       )
       .get(shortId, mark.started_at) as SessionStatsRow | undefined
 
-    const character = this.getLatestMatchCharacter(shortId)
-    const latestMr =
-      this.getLatestRating(shortId, 'MR', character) ?? this.getLatestRating(shortId, 'MR')
-    const latestLp =
-      this.getLatestRating(shortId, 'LP', character) ?? this.getLatestRating(shortId, 'LP')
+    const lastMatch = this.db
+      .prepare(
+        `SELECT my_char FROM matches
+         WHERE short_id = ? AND played_at >= ?
+         ORDER BY played_at DESC
+         LIMIT 1`
+      )
+      .get(shortId, mark.started_at) as { my_char: string | null } | undefined
+    const character = lastMatch?.my_char ?? mark.character ?? null
+    const latestMr = character
+      ? this.getLatestRating(shortId, 'MR', character)
+      : this.getLatestRating(shortId, 'MR')
+    const latestLp = character
+      ? this.getLatestRating(shortId, 'LP', character)
+      : this.getLatestRating(shortId, 'LP')
+    const startMr =
+      character !== null && mark.character !== character
+        ? this.getFirstMatchRating(
+            shortId,
+            character,
+            mark.started_at,
+            Number.MAX_SAFE_INTEGER,
+            'MR'
+          )
+        : mark.start_mr
+    const startLp =
+      character !== null && mark.character !== character
+        ? this.getFirstMatchRating(
+            shortId,
+            character,
+            mark.started_at,
+            Number.MAX_SAFE_INTEGER,
+            'LP'
+          )
+        : mark.start_lp
 
     return {
       shortId,
       startedAt: mark.started_at,
       endedAt: null,
+      character,
       matches: Number(stats?.matches ?? 0),
       wins: Number(stats?.wins ?? 0),
       losses: Number(stats?.losses ?? 0),
-      ratingDelta:
-        mark.start_mr !== null && latestMr !== null ? latestMr.value - mark.start_mr : null,
-      lpDelta: mark.start_lp !== null && latestLp !== null ? latestLp.value - mark.start_lp : null
+      ratingDelta: startMr !== null && latestMr !== null ? latestMr.value - startMr : null,
+      lpDelta: startLp !== null && latestLp !== null ? latestLp.value - startLp : null
     }
   }
 
@@ -660,6 +763,7 @@ export class Repository {
       shortId: row.short_id,
       startedAt: row.started_at,
       endedAt: row.ended_at,
+      character: row.character,
       matches: Number(stats?.matches ?? 0),
       wins: Number(stats?.wins ?? 0),
       losses: Number(stats?.losses ?? 0),

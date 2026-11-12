@@ -1,4 +1,4 @@
-import type { Match, RatingPoint, ServerEvent, SyncStatus } from '../../shared/types'
+import type { CurrentRating, Match, RatingPoint, ServerEvent, SyncStatus } from '../../shared/types'
 import type { Repository } from '../db/repository'
 import { Poller } from './poller'
 import type { MatchSource } from './fetcher'
@@ -29,6 +29,17 @@ type RecentMatches = MatchRange & {
   fetched: number
 }
 
+type StoredMatch = {
+  match: Match
+  mr: RatingPoint | null
+  lp: RatingPoint | null
+}
+
+type StoreResult = {
+  inserted: number
+  created: StoredMatch[]
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 const matchRange = (matches: Match[]): MatchRange => {
@@ -54,6 +65,7 @@ export class SyncService {
   private readonly currentFailed = new Set<string>()
   private readonly fullScanRetryAt = new Map<string, number>()
   private readonly syncQueues = new Map<string, Promise<SyncResult>>()
+  private stopping = false
 
   constructor(
     private readonly repo: Repository,
@@ -64,6 +76,7 @@ export class SyncService {
 
   start(shortIds: string[], intervalMs = 20_000): void {
     this.shortIds = shortIds
+    this.stopping = false
     this.poller?.stop()
     this.poller = new Poller(
       async () => {
@@ -74,9 +87,11 @@ export class SyncService {
     this.poller.start()
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    this.stopping = true
     this.poller?.stop()
     this.poller = null
+    await Promise.allSettled([...this.syncQueues.values()])
   }
 
   isRunning(): boolean {
@@ -90,6 +105,7 @@ export class SyncService {
   async syncAll(): Promise<SyncResult[]> {
     const results: SyncResult[] = []
     for (const shortId of this.shortIds) {
+      if (this.stopping) break
       try {
         results.push(await this.sync(shortId))
         this.failed.delete(shortId)
@@ -152,21 +168,10 @@ export class SyncService {
     const playerName = this.source.getPlayerName?.(shortId)
     if (playerName) this.repo.setDisplayNameIfEmpty(shortId, playerName)
 
-    const inserted = this.storeMatches(shortId, recent.matches)
-    if (fullScanCompleted) {
-      this.repo.setSetting(fullScanKey, String(Date.now()))
-      this.repo.setSetting(`backfill:${shortId}`, '1')
-      this.fullScanRetryAt.delete(shortId)
-    }
-
-    let currentRatings: RatingPoint[] = []
+    let currentRatingsInput: CurrentRating[] | null = null
     if (this.source.fetchCurrentRatings) {
       try {
-        currentRatings = this.repo.recordCurrentRatings(
-          shortId,
-          await this.source.fetchCurrentRatings(shortId)
-        )
-        this.currentFailed.delete(shortId)
+        currentRatingsInput = await this.source.fetchCurrentRatings(shortId)
       } catch (error) {
         if (!this.currentFailed.has(shortId)) {
           this.currentFailed.add(shortId)
@@ -179,10 +184,26 @@ export class SyncService {
       }
     }
 
+    const stored = this.repo.transaction(() => {
+      const matches = this.storeMatches(shortId, recent.matches)
+      const currentRatings = currentRatingsInput
+        ? this.repo.recordCurrentRatings(shortId, currentRatingsInput)
+        : []
+      return { ...matches, currentRatings }
+    })
+    if (currentRatingsInput) this.currentFailed.delete(shortId)
+
+    if (fullScanCompleted) {
+      this.repo.setSetting(fullScanKey, String(Date.now()))
+      this.repo.setSetting(`backfill:${shortId}`, '1')
+      this.fullScanRetryAt.delete(shortId)
+    }
+
     this.repo.rebuildSessions(shortId)
     this.repo.markSynced(shortId)
 
-    for (const point of currentRatings) {
+    this.emitStoredMatches(stored.created)
+    for (const point of stored.currentRatings) {
       this.emit({ type: 'rating:update', payload: point })
     }
 
@@ -195,7 +216,7 @@ export class SyncService {
     return {
       shortId,
       fetched: recent.fetched,
-      inserted,
+      inserted: stored.inserted,
       fullScan: fullScanCompleted,
       fullScanError,
       oldestFetchedAt: recent.oldestFetchedAt,
@@ -233,7 +254,7 @@ export class SyncService {
       let pageNew = 0
       for (const match of matches) {
         scanned.set(match.replayId, match)
-        if (this.repo.hasMatch(match.replayId)) continue
+        if (this.repo.hasMatch(shortId, match.replayId)) continue
         found.set(match.replayId, match)
         pageNew += 1
       }
@@ -244,9 +265,9 @@ export class SyncService {
     return { matches: [...found.values()], fetched, ...matchRange([...scanned.values()]) }
   }
 
-  private storeMatches(shortId: string, matches: Match[]): number {
+  private storeMatches(shortId: string, matches: Match[]): StoreResult {
     const ordered = [...matches].sort((a, b) => a.playedAt - b.playedAt)
-    const created: Array<{ match: Match; mr: RatingPoint | null; lp: RatingPoint | null }> = []
+    const created: StoredMatch[] = []
 
     for (const match of ordered) {
       if (!this.repo.insertMatch(match)) continue
@@ -255,6 +276,10 @@ export class SyncService {
       created.push({ match, mr, lp })
     }
 
+    return { inserted: created.length, created }
+  }
+
+  private emitStoredMatches(created: StoredMatch[]): void {
     if (created.length > BULK_THRESHOLD) {
       const latest = created[created.length - 1]
       if (latest) {
@@ -262,15 +287,14 @@ export class SyncService {
         if (latest.mr) this.emit({ type: 'rating:update', payload: latest.mr })
         if (latest.lp) this.emit({ type: 'rating:update', payload: latest.lp })
       }
-    } else {
-      for (const entry of created) {
-        this.emit({ type: 'match:new', payload: entry.match })
-        if (entry.mr) this.emit({ type: 'rating:update', payload: entry.mr })
-        if (entry.lp) this.emit({ type: 'rating:update', payload: entry.lp })
-      }
+      return
     }
 
-    return created.length
+    for (const entry of created) {
+      this.emit({ type: 'match:new', payload: entry.match })
+      if (entry.mr) this.emit({ type: 'rating:update', payload: entry.mr })
+      if (entry.lp) this.emit({ type: 'rating:update', payload: entry.lp })
+    }
   }
 
   private insertRating(

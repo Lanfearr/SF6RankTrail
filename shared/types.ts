@@ -44,6 +44,7 @@ export interface SessionSummary {
   shortId: string
   startedAt: number
   endedAt: number | null
+  character: string | null
   matches: number
   wins: number
   losses: number
