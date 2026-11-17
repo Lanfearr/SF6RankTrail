@@ -160,6 +160,34 @@ assert.equal(rivals[0]?.opponentId, 'OPP')
 assert.equal(rivals[0]?.matches, 2)
 assert.equal(rivals[0]?.lastResult, 'win')
 
+const opponentSeasonAt = Date.now() + 180_000
+repo.insertMatch({
+  ...match,
+  replayId: 'opponent-season-1',
+  oppChar: 'Cammy',
+  result: 'loss',
+  oppMr: 1760,
+  oppLp: 12000,
+  playedAt: opponentSeasonAt,
+  season: 'S1',
+  createdAt: opponentSeasonAt
+})
+const opponentHistory = repo.getOpponentHistory('SELF', 'OPP')
+assert.equal(opponentHistory.matches, 3)
+assert.equal(opponentHistory.wins, 2)
+assert.equal(opponentHistory.losses, 1)
+assert.equal(opponentHistory.seasons.length, 2)
+const seasonOne = opponentHistory.seasons.find((season) => season.season === 'S1')
+assert.equal(seasonOne?.matches, 1)
+assert.equal(seasonOne?.characters[0]?.character, 'Cammy')
+assert.equal(seasonOne?.characters[0]?.mr, 1760)
+assert.equal(seasonOne?.characters[0]?.lp, 12000)
+const monthlySeason = opponentHistory.seasons.find((season) => season.season === null)
+assert.equal(monthlySeason?.matches, 2)
+assert.equal(monthlySeason?.characters[0]?.character, 'Ken')
+assert.equal(monthlySeason?.characters[0]?.mr, 1750)
+assert.equal(monthlySeason?.characters[0]?.lp, 11000)
+
 const importStart = Date.now() + 240_000
 const importPlayer: Player = {
   shortId: 'IMPORT',

@@ -65,10 +65,19 @@ export default function App() {
     setPage('detail')
   }
 
+  useEffect(
+    () =>
+      window.api.onMatchOpen((match) => {
+        setSelectedMatch(match)
+        setPage('detail')
+      }),
+    []
+  )
+
   const renderPage = () => {
     switch (page) {
       case 'overview':
-        return <OverviewPage />
+        return <OverviewPage onSelectMatch={openMatch} />
       case 'sessions':
         return <SessionsPage shortId={activeShortId} lastEvent={lastEvent} />
       case 'progress':

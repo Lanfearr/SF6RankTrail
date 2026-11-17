@@ -31,6 +31,7 @@ interface Props {
   deltas: ReadonlyMap<number, number>
   xAxisMode?: 'match' | 'date'
   showZoomSlider?: boolean
+  onSelectMatch?: (match: Match) => void
 }
 
 interface ChartIcon {
@@ -42,6 +43,7 @@ interface ChartIcon {
   label: string
   result: MatchResult
   delta: number | null
+  match: Match
 }
 
 interface TooltipParam {
@@ -94,7 +96,8 @@ export function TrendChart({
   matches,
   deltas,
   xAxisMode = 'match',
-  showZoomSlider = false
+  showZoomSlider = false,
+  onSelectMatch
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<ReturnType<typeof echarts.init> | null>(null)
@@ -299,7 +302,8 @@ export function TrendChart({
           src,
           label: match.oppChar ?? '对手',
           result: match.result,
-          delta: deltas.get(match.playedAt) ?? null
+          delta: deltas.get(match.playedAt) ?? null,
+          match
         })
       }
 
@@ -366,24 +370,48 @@ export function TrendChart({
     >
       <div className="chart" ref={containerRef} />
       <div className="chart-icons">
-        {chartIcons.map((icon) => (
-          <span
-            key={icon.key}
-            className={`chart-icon ${icon.result}`}
-            style={{
-              left: icon.left,
-              top: icon.top,
-              width: icon.size,
-              height: icon.size
-            }}
-            title={`${icon.label} · ${resultLabel(icon.result)}`}
-          >
-            <img src={icon.src} alt={icon.label} draggable={false} />
-            {icon.delta !== null && (
-              <span className={`chart-delta ${icon.result}`}>{formatDelta(icon.delta)}</span>
-            )}
-          </span>
-        ))}
+        {chartIcons.map((icon) => {
+          const style = {
+            left: icon.left,
+            top: icon.top,
+            width: icon.size,
+            height: icon.size
+          }
+          const title = `${icon.label} · ${resultLabel(icon.result)}`
+          const content = (
+            <>
+              <img src={icon.src} alt={icon.label} draggable={false} />
+              {icon.delta !== null && (
+                <span className={`chart-delta ${icon.result}`}>{formatDelta(icon.delta)}</span>
+              )}
+            </>
+          )
+
+          return onSelectMatch ? (
+            <button
+              key={icon.key}
+              type="button"
+              className={`chart-icon ${icon.result}`}
+              style={style}
+              title={`${title} · 点击查看详情`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onSelectMatch(icon.match)
+              }}
+            >
+              {content}
+            </button>
+          ) : (
+            <span
+              key={icon.key}
+              className={`chart-icon ${icon.result}`}
+              style={style}
+              title={title}
+            >
+              {content}
+            </span>
+          )
+        })}
       </div>
     </div>
   )

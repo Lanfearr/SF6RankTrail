@@ -5,6 +5,9 @@ import type {
   Match,
   MatchQuery,
   MatchupStat,
+  OpponentHistory,
+  OpponentSeason,
+  OpponentSeasonCharacter,
   Player,
   PlayerDashboard,
   RatingPoint,
@@ -958,6 +961,97 @@ export class Repository {
         lastResult: row.last_result
       }
     })
+  }
+
+  getOpponentHistory(shortId: string, opponentId: string): OpponentHistory {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM matches
+         WHERE short_id = ? AND opponent_id = ?
+         ORDER BY played_at ASC, replay_id ASC`
+      )
+      .all(shortId, opponentId) as unknown as MatchRow[]
+
+    const seasons = new Map<string, OpponentSeason>()
+    const charactersBySeason = new Map<string, Map<string, OpponentSeasonCharacter>>()
+    let wins = 0
+    let losses = 0
+
+    for (const row of rows) {
+      const date = new Date(row.played_at)
+      const key = row.season
+        ? `season:${row.season}`
+        : `month:${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+      let season = seasons.get(key)
+      let characterMap = charactersBySeason.get(key)
+      if (!season || !characterMap) {
+        season = {
+          key,
+          label: row.season
+            ? `赛季 ${row.season}`
+            : `${date.getFullYear()} 年 ${date.getMonth() + 1} 月`,
+          season: row.season,
+          matches: 0,
+          wins: 0,
+          losses: 0,
+          firstPlayedAt: row.played_at,
+          lastPlayedAt: row.played_at,
+          characters: []
+        }
+        characterMap = new Map()
+        seasons.set(key, season)
+        charactersBySeason.set(key, characterMap)
+      }
+
+      season.matches += 1
+      season.lastPlayedAt = row.played_at
+      if (row.result === 'win') {
+        season.wins += 1
+        wins += 1
+      } else if (row.result === 'loss') {
+        season.losses += 1
+        losses += 1
+      }
+
+      const name = row.opp_char ?? '未知角色'
+      let character = characterMap.get(name)
+      if (!character) {
+        character = {
+          character: name,
+          matches: 0,
+          wins: 0,
+          losses: 0,
+          mr: null,
+          lp: null,
+          lastPlayedAt: row.played_at
+        }
+        characterMap.set(name, character)
+        season.characters.push(character)
+      }
+      character.matches += 1
+      character.lastPlayedAt = row.played_at
+      if (row.result === 'win') character.wins += 1
+      if (row.result === 'loss') character.losses += 1
+      if (row.opp_mr !== null) character.mr = row.opp_mr
+      if (row.opp_lp !== null) character.lp = row.opp_lp
+    }
+
+    const seasonList = [...seasons.values()].sort((a, b) => b.lastPlayedAt - a.lastPlayedAt)
+    for (const season of seasonList) {
+      season.characters.sort(
+        (a, b) => b.matches - a.matches || b.lastPlayedAt - a.lastPlayedAt
+      )
+    }
+
+    return {
+      opponentId,
+      matches: rows.length,
+      wins,
+      losses,
+      firstPlayedAt: rows[0]?.played_at ?? 0,
+      lastPlayedAt: rows[rows.length - 1]?.played_at ?? 0,
+      seasons: seasonList
+    }
   }
 
   getSeasonReport(shortId: string): SeasonStat[] {

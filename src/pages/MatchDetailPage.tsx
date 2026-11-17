@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Match, RatingKind, RatingPoint } from '@shared/types'
 import { CharacterIcon } from '../components/CharacterIcon'
+import { OpponentInfoCard } from '../components/OpponentInfoCard'
 import { EmptyState, LoadingBlock, PageHeader } from '../components/Page'
 import { formatDelta } from '../lib/format'
 import { buildRatingDeltas } from '../lib/ratings'
@@ -156,6 +157,8 @@ export function MatchDetailPage({ shortId, selectedMatch }: Props) {
               </div>
             </div>
           </section>
+
+          <OpponentInfoCard shortId={shortId} opponentId={current.opponentId} />
         </div>
       )}
     </div>

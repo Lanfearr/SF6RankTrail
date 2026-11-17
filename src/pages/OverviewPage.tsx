@@ -17,7 +17,11 @@ const signed = (value: number | null): string =>
 const tone = (value: number | null): 'up' | 'down' | undefined =>
   value === null ? undefined : value > 0 ? 'up' : value < 0 ? 'down' : undefined
 
-export function OverviewPage() {
+interface Props {
+  onSelectMatch?: (match: Match) => void
+}
+
+export function OverviewPage({ onSelectMatch }: Props) {
   const players = useAppStore((state) => state.players)
   const dashboards = useAppStore((state) => state.dashboards)
   const activeShortId = useAppStore((state) => state.activeShortId)
@@ -331,6 +335,7 @@ export function OverviewPage() {
                   deltas={ratingDeltas}
                   xAxisMode="date"
                   showZoomSlider
+                  onSelectMatch={onSelectMatch}
                 />
               </div>
             )}

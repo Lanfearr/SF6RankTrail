@@ -18,6 +18,7 @@ import type {
   LoginResult,
   Match,
   MatchQuery,
+  OpponentLeagueInfo,
   Player,
   PlayerInput,
   RatingPoint,
@@ -47,6 +48,7 @@ const MINI_SIZE = { width: 440, height: 340 }
 const PRO_SIZE = { width: 960, height: 660 }
 const AUTO_BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000
 const AUTO_BACKUP_RETENTION = 14
+const OPPONENT_CACHE_TTL_MS = 10 * 60 * 1000
 
 let mainWindow: BrowserWindow | null = null
 let chartWindow: BrowserWindow | null = null
@@ -65,6 +67,7 @@ let activeShortId: string | null = null
 let syncStatus: SyncStatus = { state: 'idle', at: Date.now() }
 let autoBackupTimer: ReturnType<typeof setInterval> | null = null
 const statusHistory: SyncStatus[] = []
+const opponentLeagueCache = new Map<string, OpponentLeagueInfo>()
 
 const hasSingleInstanceLock =
   process.env.SF6_SCORER_DISABLE_SINGLE_INSTANCE === '1' || app.requestSingleInstanceLock()
@@ -275,6 +278,14 @@ function ensureSyncService(): SyncService | null {
   source = new ElectronBucklerSource(sessionPath)
   syncService = new SyncService(repo, source, (event) => hub?.broadcast(event), setStatus)
   return syncService
+}
+
+function requireBucklerSource(): ElectronBucklerSource {
+  const service = ensureSyncService()
+  if (!service || !source) {
+    throw new Error('未登录，请先在设置中完成 CAPCOM ID 登录')
+  }
+  return source
 }
 
 async function stopSync(): Promise<void> {
@@ -661,6 +672,40 @@ function registerIpc(): void {
     repo.getRivalStats(shortId, limit)
   )
 
+  ipcMain.handle('opponents:history', async (_event, shortId: string, opponentId: string) =>
+    repo.getOpponentHistory(shortId, opponentId)
+  )
+
+  ipcMain.handle('opponents:seasons', async (_event, opponentId: string) => {
+    const info = await requireBucklerSource().fetchOpponentSeasons(opponentId)
+    return { opponentId, ...info }
+  })
+
+  ipcMain.handle(
+    'opponents:leagueInfo',
+    async (_event, opponentId: string, seasonId: number, force = false) => {
+      const key = `${opponentId}:${seasonId}`
+      const cached = opponentLeagueCache.get(key)
+      if (!force && cached && Date.now() - cached.fetchedAt < OPPONENT_CACHE_TTL_MS) {
+        return { ...cached, cached: true }
+      }
+
+      const characters = await requireBucklerSource().fetchOpponentLeagueInfo(
+        opponentId,
+        seasonId
+      )
+      const data: OpponentLeagueInfo = {
+        opponentId,
+        seasonId,
+        characters,
+        fetchedAt: Date.now(),
+        cached: false
+      }
+      opponentLeagueCache.set(key, data)
+      return data
+    }
+  )
+
   ipcMain.handle('diagnostics:get', async (_event, shortId: string) => getDiagnostics(shortId))
 
   ipcMain.handle('session:refresh', async (_event, shortId: string) => {
@@ -780,6 +825,14 @@ function registerIpc(): void {
     activeShortId = shortId
     repo.setSetting('activeShortId', shortId)
     broadcastActivePlayer()
+  })
+
+  ipcMain.on('match:openDetail', (_event, match: Match) => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+    mainWindow.webContents.send('match:open', match)
   })
 
   ipcMain.on('chart:open', () => createChartWindow())

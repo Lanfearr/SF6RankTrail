@@ -168,6 +168,58 @@ export interface MatchPage {
   total: number
 }
 
+export interface OpponentSeasonCharacter {
+  character: string
+  matches: number
+  wins: number
+  losses: number
+  mr: number | null
+  lp: number | null
+  lastPlayedAt: number
+}
+
+export interface OpponentSeason {
+  key: string
+  label: string
+  season: string | null
+  matches: number
+  wins: number
+  losses: number
+  firstPlayedAt: number
+  lastPlayedAt: number
+  characters: OpponentSeasonCharacter[]
+}
+
+export interface OpponentHistory {
+  opponentId: string
+  matches: number
+  wins: number
+  losses: number
+  firstPlayedAt: number
+  lastPlayedAt: number
+  seasons: OpponentSeason[]
+}
+
+export interface OpponentSeasonSummary {
+  opponentId: string
+  currentSeasonId: number | null
+  seasonIds: number[]
+}
+
+export interface OpponentLeagueCharacter {
+  character: string
+  mr: number | null
+  lp: number | null
+}
+
+export interface OpponentLeagueInfo {
+  opponentId: string
+  seasonId: number
+  characters: OpponentLeagueCharacter[]
+  fetchedAt: number
+  cached: boolean
+}
+
 export interface CharacterStat {
   character: string
   matches: number
@@ -257,6 +309,13 @@ export interface IpcApi {
   sessionHistory: (shortId: string, limit?: number) => Promise<SessionHistoryEntry[]>
   matchupStats: (shortId: string) => Promise<MatchupStat[]>
   rivalStats: (shortId: string, limit?: number) => Promise<RivalStat[]>
+  opponentHistory: (shortId: string, opponentId: string) => Promise<OpponentHistory>
+  opponentSeasons: (opponentId: string) => Promise<OpponentSeasonSummary>
+  opponentLeagueInfo: (
+    opponentId: string,
+    seasonId: number,
+    force?: boolean
+  ) => Promise<OpponentLeagueInfo>
   diagnostics: (shortId: string) => Promise<Diagnostics>
   refreshSession: (shortId: string) => Promise<SessionSummary | null>
   rescanHistory: (shortId: string) => Promise<SyncResult>
@@ -273,6 +332,8 @@ export interface IpcApi {
   runAutoBackup: () => Promise<ExportResult>
   autoBackupStatus: () => Promise<AutoBackupStatus>
   openChart: () => void
+  openMatchDetail: (match: Match) => void
+  onMatchOpen: (listener: (match: Match) => void) => () => void
   closeChart: () => void
   chartSetMode: (mode: ChartMode) => void
   chartSetAlwaysOnTop: (value: boolean) => void

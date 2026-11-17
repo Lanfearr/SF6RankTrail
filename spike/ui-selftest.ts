@@ -299,6 +299,20 @@ const main = async (): Promise<void> => {
       await window.locator('.overview-chart-panel .chart-wrap').getAttribute('data-zoom-slider'),
       'true'
     )
+    await window.waitForFunction(
+      () => document.querySelectorAll('.overview-chart-panel .chart-icon').length > 0,
+      undefined,
+      { timeout: 5_000 }
+    )
+    await window.locator('.overview-chart-panel .chart-icon').first().click()
+    await window.waitForSelector('.detail-grid', { timeout: 5_000 })
+    assert.equal(await window.textContent('.page-title'), '对战详情')
+    await window.waitForSelector('.opponent-card', { timeout: 5_000 })
+    await window.waitForSelector('.opponent-table .stats-table-row', { timeout: 5_000 })
+    assert.equal(await window.locator('.opponent-table .stats-table-row').count(), 1)
+
+    await window.click('.nav-item:has-text("概览")')
+    await window.waitForSelector('.overview-chart-panel .chart-wrap', { timeout: 8_000 })
 
     await window.click('.nav-item:has-text("会话历史")')
     await window.waitForSelector('.session-table .stats-table-row', { timeout: 5_000 })
@@ -460,6 +474,12 @@ const main = async (): Promise<void> => {
     const lastIconSrc = await chart.locator('.chart-icon img').last().getAttribute('src')
     assert.equal(Boolean(firstIconSrc?.includes('characters/ken.png')), true)
     assert.equal(Boolean(lastIconSrc?.includes('characters/m-bison.png')), true)
+
+    await chart.locator('.chart-icon').first().click()
+    await window.waitForSelector('.detail-grid', { timeout: 5_000 })
+    assert.equal(await window.textContent('.page-title'), '对战详情')
+    await window.waitForSelector('.opponent-card', { timeout: 5_000 })
+    await window.waitForSelector('.opponent-table .stats-table-row', { timeout: 5_000 })
 
     const winBorder = await chart
       .locator('.chart-icon.win')

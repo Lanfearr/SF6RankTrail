@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import type { IpcApi } from '../shared/types'
+import type { IpcApi, Match } from '../shared/types'
 
 const api: IpcApi = {
   authLogin: (input) => ipcRenderer.invoke('auth:login', input),
@@ -17,6 +17,11 @@ const api: IpcApi = {
   sessionHistory: (shortId, limit) => ipcRenderer.invoke('sessions:history', shortId, limit),
   matchupStats: (shortId) => ipcRenderer.invoke('stats:matchups', shortId),
   rivalStats: (shortId, limit) => ipcRenderer.invoke('stats:rivals', shortId, limit),
+  opponentHistory: (shortId, opponentId) =>
+    ipcRenderer.invoke('opponents:history', shortId, opponentId),
+  opponentSeasons: (opponentId) => ipcRenderer.invoke('opponents:seasons', opponentId),
+  opponentLeagueInfo: (opponentId, seasonId, force) =>
+    ipcRenderer.invoke('opponents:leagueInfo', opponentId, seasonId, force),
   diagnostics: (shortId) => ipcRenderer.invoke('diagnostics:get', shortId),
   refreshSession: (shortId) => ipcRenderer.invoke('session:refresh', shortId),
   rescanHistory: (shortId) => ipcRenderer.invoke('sync:rescan', shortId),
@@ -33,6 +38,12 @@ const api: IpcApi = {
   runAutoBackup: () => ipcRenderer.invoke('backup:autoNow'),
   autoBackupStatus: () => ipcRenderer.invoke('backup:autoStatus'),
   openChart: () => ipcRenderer.send('chart:open'),
+  openMatchDetail: (match) => ipcRenderer.send('match:openDetail', match),
+  onMatchOpen: (listener) => {
+    const handler = (_event: IpcRendererEvent, match: Match) => listener(match)
+    ipcRenderer.on('match:open', handler)
+    return () => ipcRenderer.removeListener('match:open', handler)
+  },
   closeChart: () => ipcRenderer.send('chart:close'),
   chartSetMode: (mode) => ipcRenderer.send('chart:setMode', mode),
   chartSetAlwaysOnTop: (value) => ipcRenderer.send('chart:setAlwaysOnTop', value),

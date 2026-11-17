@@ -499,6 +499,23 @@ body {
   transform: translate(-50%, -50%);
 }
 
+button.chart-icon {
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+button.chart-icon:hover {
+  filter: brightness(1.15);
+}
+
+button.chart-icon:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #1c1c24, 0 0 0 4px #f59e0b;
+}
+
 .chart-delta {
   position: absolute;
   left: 50%;
@@ -1246,6 +1263,81 @@ body {
 
 .detail-kpis strong {
   font-size: 18px;
+}
+
+.detail-grid > .opponent-card {
+  grid-column: 1 / -1;
+}
+
+.opponent-card {
+  gap: 16px;
+}
+
+.opponent-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.opponent-summary span {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: #a1a1aa;
+  font-size: 12px;
+}
+
+.opponent-summary strong {
+  color: #f4f4f5;
+}
+
+.opponent-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.opponent-section-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.opponent-section-title h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.opponent-season {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.opponent-season-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.opponent-table .stats-table-head,
+.opponent-table .stats-table-row {
+  grid-template-columns: 1.4fr 0.5fr 0.6fr 0.8fr 0.8fr 1.1fr;
+}
+
+.opponent-league-table .stats-table-head,
+.opponent-league-table .stats-table-row {
+  grid-template-columns: 1.4fr 0.8fr 0.8fr;
+}
+
+.opponent-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 12px;
 }
 
 .mono {

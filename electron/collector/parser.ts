@@ -1,4 +1,9 @@
-import type { CurrentRating, Match, MatchResult } from '../../shared/types'
+import type {
+  CurrentRating,
+  Match,
+  MatchResult,
+  OpponentLeagueCharacter
+} from '../../shared/types'
 
 type Json = Record<string, unknown>
 
@@ -134,6 +139,56 @@ export function parseCurrentRatings(data: unknown): CurrentRating[] {
     })
   }
   return ratings
+}
+
+export interface PlayerSeasonInfo {
+  currentSeasonId: number | null
+  seasonIds: number[]
+}
+
+export function parsePlayerSeasonInfo(data: unknown): PlayerSeasonInfo {
+  if (!isObject(data)) return { currentSeasonId: null, seasonIds: [] }
+  const props = isObject(data.props) ? data.props : data
+  const pageProps = isObject(props.pageProps) ? props.pageProps : props
+  const play = isObject(pageProps.play) ? pageProps.play : null
+  if (!play) return { currentSeasonId: null, seasonIds: [] }
+
+  const currentSeasonId = asNumber(pick(play, ['current_season_id', 'currentSeasonId']))
+  const rawSeasonIds = pick(play, ['season_ids', 'seasonIds'])
+  const seasonIds: number[] = []
+  if (Array.isArray(rawSeasonIds)) {
+    for (const raw of rawSeasonIds) {
+      const id = asNumber(raw)
+      if (id !== null && !seasonIds.includes(id)) seasonIds.push(id)
+    }
+  }
+  return { currentSeasonId, seasonIds }
+}
+
+export function parseOpponentLeagueInfo(data: unknown): OpponentLeagueCharacter[] {
+  if (!isObject(data)) return []
+  const response = isObject(data.response) ? data.response : data
+  const infos =
+    (Array.isArray(response.character_league_infos) && response.character_league_infos) ||
+    (Array.isArray(response.characterLeagueInfos) && response.characterLeagueInfos) ||
+    []
+
+  const characters: OpponentLeagueCharacter[] = []
+  for (const info of infos) {
+    if (!isObject(info) || info.is_played === false) continue
+    const character = asString(pick(info, ['character_name', 'characterName']))
+    const league = isObject(info.league_info) ? info.league_info : null
+    if (!character || !league) continue
+    const mr = asNumber(pick(league, ['master_rating', 'masterRating']))
+    const lp = asNumber(pick(league, ['league_point', 'leaguePoint']))
+    if ((mr === null || mr <= 0) && (lp === null || lp <= 0)) continue
+    characters.push({
+      character,
+      mr: mr !== null && mr > 0 ? mr : null,
+      lp: lp !== null && lp > 0 ? lp : null
+    })
+  }
+  return characters
 }
 
 export function findBattleLogArrays(data: unknown): unknown[][] {

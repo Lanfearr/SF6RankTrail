@@ -1,6 +1,6 @@
 import { session, type Session } from 'electron'
 import { readFile } from 'node:fs/promises'
-import type { CurrentRating, Match } from '../../shared/types'
+import type { CurrentRating, Match, OpponentLeagueCharacter } from '../../shared/types'
 import {
   battleLogUrl,
   cookieUrl,
@@ -13,8 +13,11 @@ import type { MatchSource } from './fetcher'
 import {
   parseBattleLog,
   parseCurrentRatings,
+  parseOpponentLeagueInfo,
+  parsePlayerSeasonInfo,
   readBattleLogPageInfo,
-  readPlayerName
+  readPlayerName,
+  type PlayerSeasonInfo
 } from './parser'
 import { isRetryableStatus, parseRetryAfter, retryDelayMs } from './retry'
 
@@ -29,6 +32,40 @@ const SAME_SITE: Record<SavedCookie['sameSite'], 'strict' | 'lax' | 'no_restrict
   Strict: 'strict',
   Lax: 'lax',
   None: 'no_restriction'
+}
+
+const BUCKLER_LOCALES = new Set([
+  'ja-jp',
+  'en',
+  'fr',
+  'it',
+  'de',
+  'es-es',
+  'es-us',
+  'ru',
+  'pl',
+  'pt-br',
+  'zh-hant',
+  'zh-hans',
+  'ko-kr',
+  'ar'
+])
+
+const resolveBucklerLocale = (language: string): string => {
+  const normalized = (language.split(',')[0] ?? '').trim().toLowerCase()
+  if (BUCKLER_LOCALES.has(normalized)) return normalized
+  if (/^zh-(tw|hk|mo)/.test(normalized) || normalized.startsWith('zh-hant')) {
+    return 'zh-hant'
+  }
+  if (normalized.startsWith('zh')) return 'zh-hans'
+  if (normalized.startsWith('ja')) return 'ja-jp'
+  if (normalized.startsWith('ko')) return 'ko-kr'
+  if (normalized.startsWith('pt')) return 'pt-br'
+  if (normalized.startsWith('es')) {
+    return normalized.includes('419') || normalized.endsWith('-us') ? 'es-us' : 'es-es'
+  }
+  const base = normalized.split('-')[0] ?? ''
+  return BUCKLER_LOCALES.has(base) ? base : 'en'
 }
 
 const buildHeaders = (state: SavedSessionState): Record<string, string> => {
@@ -57,6 +94,26 @@ const buildHeaders = (state: SavedSessionState): Record<string, string> => {
         .join(', ')
     }
   }
+
+  return headers
+}
+
+const buildApiHeaders = (state: SavedSessionState, shortId: string): Record<string, string> => {
+  const headers: Record<string, string> = {
+    ...buildHeaders(state),
+    accept: 'application/json, text/plain, */*',
+    'content-type': 'application/json',
+    origin: 'https://www.streetfighter.com',
+    referer: profileUrl(shortId),
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin'
+  }
+
+  delete headers['sec-fetch-user']
+  delete headers['upgrade-insecure-requests']
+  delete headers['cache-control']
+  delete headers.pragma
 
   return headers
 }
@@ -196,6 +253,78 @@ export class ElectronBucklerSource implements MatchSource {
     const playerName = readPlayerName(data, shortId)
     if (playerName) this.playerNames.set(shortId, playerName)
     return parseCurrentRatings(data)
+  }
+
+  async fetchOpponentSeasons(shortId: string): Promise<PlayerSeasonInfo> {
+    const data = await this.fetchDocument(profileUrl(shortId))
+    const playerName = readPlayerName(data, shortId)
+    if (playerName) this.playerNames.set(shortId, playerName)
+    return parsePlayerSeasonInfo(data)
+  }
+
+  async fetchOpponentLeagueInfo(
+    shortId: string,
+    seasonId: number
+  ): Promise<OpponentLeagueCharacter[]> {
+    const state = await this.ensureSession()
+    const url = 'https://www.streetfighter.com/6/buckler/api/profile/play/act/leagueinfo'
+    const body = JSON.stringify({
+      targetShortId: /^\d+$/.test(shortId) ? Number(shortId) : shortId,
+      targetSeasonId: seasonId,
+      locale: resolveBucklerLocale(state.language || 'en'),
+      peak: seasonId === -1
+    })
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+      let response: Response
+      try {
+        response = await this.ses.fetch(url, {
+          method: 'POST',
+          headers: buildApiHeaders(state, shortId),
+          body,
+          redirect: 'follow'
+        })
+      } catch (error) {
+        if (attempt + 1 >= MAX_ATTEMPTS) throw error
+        await sleep(retryDelayMs(attempt))
+        continue
+      }
+
+      if (response.status === 403) {
+        throw new Error('登录态无效或 Cloudflare 风控拦截，请重新登录')
+      }
+      if (response.status === 401) {
+        throw new Error('登录已过期，请重新登录')
+      }
+      if (!response.ok) {
+        if (isRetryableStatus(response.status) && attempt + 1 < MAX_ATTEMPTS) {
+          await response.body?.cancel().catch(() => undefined)
+          await sleep(
+            retryDelayMs(attempt, parseRetryAfter(response.headers.get('retry-after')))
+          )
+          continue
+        }
+        const retried = attempt > 0 ? `（已重试 ${attempt} 次）` : ''
+        throw new Error(`Buckler HTTP ${response.status}${retried}`)
+      }
+
+      const text = await response.text()
+      if (
+        /performing security verification|security service to protect|verif(y|ying) (that )?you are (a )?human/i.test(
+          text
+        )
+      ) {
+        throw new Error('Cloudflare 人机验证拦截，请重新登录')
+      }
+      if (!text.trim()) return []
+      try {
+        return parseOpponentLeagueInfo(JSON.parse(text) as unknown)
+      } catch {
+        throw new Error('Buckler 返回了非 JSON 数据，请重新登录或稍后重试')
+      }
+    }
+
+    throw new Error('Buckler 请求失败')
   }
 
   async fetchAllMatches(shortId: string): Promise<Match[]> {

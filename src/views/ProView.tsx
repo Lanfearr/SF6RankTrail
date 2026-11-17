@@ -197,7 +197,13 @@ export function ProView() {
         </aside>
 
         <section className="chart-column">
-          <TrendChart points={chartPoints} kind={kind} matches={matches} deltas={ratingDeltas} />
+          <TrendChart
+            points={chartPoints}
+            kind={kind}
+            matches={matches}
+            deltas={ratingDeltas}
+            onSelectMatch={(match) => window.api.openMatchDetail(match)}
+          />
         </section>
       </main>
     </div>
