@@ -74,6 +74,7 @@ const migrateMatchesPrimaryKey = (db: Db): void => {
         replay_id     TEXT NOT NULL,
         short_id      TEXT NOT NULL REFERENCES players(short_id),
         opponent_id   TEXT,
+        opponent_name TEXT,
         my_char       TEXT,
         opp_char      TEXT,
         result        TEXT NOT NULL CHECK (result IN ('win','loss','draw')),
@@ -89,10 +90,10 @@ const migrateMatchesPrimaryKey = (db: Db): void => {
     `)
     db.exec(`
       INSERT INTO matches_new
-        (replay_id, short_id, opponent_id, my_char, opp_char, result,
+        (replay_id, short_id, opponent_id, opponent_name, my_char, opp_char, result,
          my_mr, opp_mr, my_lp, opp_lp, played_at, season, created_at)
       SELECT
-        replay_id, short_id, opponent_id, my_char, opp_char, result,
+        replay_id, short_id, opponent_id, opponent_name, my_char, opp_char, result,
         my_mr, opp_mr, my_lp, opp_lp, played_at, season, created_at
       FROM matches;
     `)
@@ -159,6 +160,7 @@ export function openDatabase(file: string, schema: string): OpenDatabaseResult {
 
     db.exec(schema)
     ensureColumn(db, 'matches', 'opp_lp', 'opp_lp INTEGER')
+    ensureColumn(db, 'matches', 'opponent_name', 'opponent_name TEXT')
     ensureColumn(db, 'sessions', 'start_lp', 'start_lp INTEGER')
     ensureColumn(db, 'sessions', 'end_lp', 'end_lp INTEGER')
     ensureColumn(db, 'sessions', 'character', 'character TEXT')

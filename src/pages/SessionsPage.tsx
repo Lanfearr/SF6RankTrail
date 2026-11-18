@@ -154,6 +154,7 @@ export function SessionsPage({ shortId, lastEvent }: Props) {
               <span>MR 净分</span>
               <span>LP 净分</span>
               <span>MR 范围</span>
+              <span>LP 范围</span>
             </div>
             {rows.map((row) => (
               <div className="stats-table-row" key={`${row.startedAt}-${row.endedAt ?? 'open'}`}>
@@ -167,6 +168,9 @@ export function SessionsPage({ shortId, lastEvent }: Props) {
                 <span className={tone(row.lpDelta) ?? 'muted'}>{signed(row.lpDelta)}</span>
                 <span className="muted">
                   {row.startRating?.toLocaleString() ?? '—'} → {row.endRating?.toLocaleString() ?? '—'}
+                </span>
+                <span className="muted">
+                  {row.startLp?.toLocaleString() ?? '—'} → {row.endLp?.toLocaleString() ?? '—'}
                 </span>
               </div>
             ))}

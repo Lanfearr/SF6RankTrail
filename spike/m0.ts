@@ -53,7 +53,7 @@ const selfTest = (): void => {
               round_results: [1, 2]
             },
             player2_info: {
-              player: { short_id: 'OTHER' },
+              player: { short_id: 'OTHER', fighter_id: '对手昵称' },
               character_name: 'Ken',
               master_rating: 1750,
               league_point: 11950,
@@ -73,6 +73,8 @@ const selfTest = (): void => {
   if (match.myMr !== 1800) throw new Error(`self-test failed: expected MR 1800, got ${match.myMr}`)
   if (match.oppLp !== 11950)
     throw new Error(`self-test failed: expected opponent LP 11950, got ${match.oppLp}`)
+  if (match.opponentName !== '对手昵称')
+    throw new Error(`self-test failed: expected opponent name, got ${match.opponentName}`)
   const pageInfo = readBattleLogPageInfo({
     props: { pageProps: { pagination: { total_pages: 3, current_page: 1 } } }
   })

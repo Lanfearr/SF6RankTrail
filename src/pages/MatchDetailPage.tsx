@@ -158,7 +158,11 @@ export function MatchDetailPage({ shortId, selectedMatch }: Props) {
             </div>
           </section>
 
-          <OpponentInfoCard shortId={shortId} opponentId={current.opponentId} />
+          <OpponentInfoCard
+            shortId={shortId}
+            opponentId={current.opponentId}
+            opponentName={current.opponentName}
+          />
         </div>
       )}
     </div>

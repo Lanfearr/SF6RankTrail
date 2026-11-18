@@ -47,6 +47,7 @@ const main = async (): Promise<void> => {
       replayId: `replay-${seq}`,
       shortId: 'SELF',
       opponentId: `OPP-${seq}`,
+      opponentName: `Opponent ${seq}`,
       myChar: character,
       oppChar: 'Ken',
       result,
@@ -87,6 +88,16 @@ const main = async (): Promise<void> => {
   assert.equal(first.inserted, 4)
   assert.equal(repo.listMatches({ shortId: 'SELF' }).length, 4)
   assert.equal(repo.listRatings({ shortId: 'SELF', kind: 'MR' }).length, 4)
+
+  const firstFeedMatch = feed[0]!
+  firstFeedMatch.opponentName = 'Updated Opponent'
+  const backfilled = await service.sync('SELF')
+  assert.equal(backfilled.inserted, 0)
+  assert.equal(
+    repo.listMatches({ shortId: 'SELF' }).find((match) => match.replayId === firstFeedMatch.replayId)
+      ?.opponentName,
+    'Updated Opponent'
+  )
 
   const sessions = repo.listSessions('SELF')
   assert.equal(sessions.length, 2, 'gap >= 3h should split sessions')

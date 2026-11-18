@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS matches (
   replay_id     TEXT NOT NULL,
   short_id      TEXT NOT NULL REFERENCES players(short_id),
   opponent_id   TEXT,
+  opponent_name TEXT,
   my_char       TEXT,
   opp_char      TEXT,
   result        TEXT NOT NULL CHECK (result IN ('win','loss','draw')),

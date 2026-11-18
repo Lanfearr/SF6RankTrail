@@ -254,7 +254,10 @@ export class SyncService {
       let pageNew = 0
       for (const match of matches) {
         scanned.set(match.replayId, match)
-        if (this.repo.hasMatch(shortId, match.replayId)) continue
+        if (this.repo.hasMatch(shortId, match.replayId)) {
+          this.repo.updateOpponentName(shortId, match.replayId, match.opponentName)
+          continue
+        }
         found.set(match.replayId, match)
         pageNew += 1
       }
@@ -270,7 +273,10 @@ export class SyncService {
     const created: StoredMatch[] = []
 
     for (const match of ordered) {
-      if (!this.repo.insertMatch(match)) continue
+      if (!this.repo.insertMatch(match)) {
+        this.repo.updateOpponentName(shortId, match.replayId, match.opponentName)
+        continue
+      }
       const mr = match.myMr !== null ? this.insertRating(shortId, match, 'MR', match.myMr) : null
       const lp = match.myLp !== null ? this.insertRating(shortId, match, 'LP', match.myLp) : null
       created.push({ match, mr, lp })

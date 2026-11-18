@@ -211,6 +211,7 @@ export function findBattleLogArrays(data: unknown): unknown[][] {
 interface SideInfo {
   raw: Json
   shortId: string | null
+  name: string | null
   character: string | null
   masterRating: number | null
   lp: number | null
@@ -228,6 +229,7 @@ const readSide = (raw: unknown): SideInfo | null => {
   return {
     raw: info,
     shortId: asString(pick(player, ['short_id', 'shortId'])),
+    name: asString(pick(player, ['fighter_id', 'fighterId', 'display_name', 'displayName'])),
     character: asString(pick(info, ['character_name', 'characterName', 'character'])),
     masterRating: asNumber(pick(info, ['master_rating', 'masterRating'])),
     lp: asNumber(pick(info, ['league_point', 'leaguePoint', 'lp'])),
@@ -274,6 +276,7 @@ export function normalizeMatch(raw: unknown, ownerShortId: string): Match | null
     replayId,
     shortId: ownerShortId,
     opponentId: opp.shortId,
+    opponentName: opp.name,
     myChar: me.character,
     oppChar: opp.character,
     result: outcomeFor(me, opp),

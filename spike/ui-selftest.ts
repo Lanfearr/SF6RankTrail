@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { _electron as electron } from 'playwright'
 import { Repository } from '../electron/db/repository'
+import { useAppStore } from '../src/store/useAppStore'
 
 const main = async (): Promise<void> => {
   const userData = mkdtempSync(join(tmpdir(), 'sf6-ui-selftest-'))
@@ -88,7 +89,7 @@ const main = async (): Promise<void> => {
     {
       replayId: 'ui-2',
       myChar: 'Ken',
-      oppChar: 'Chun-Li',
+      oppChar: 'Edmond Honda',
       result: 'loss' as const,
       mr: 1795,
       lp: 12050
@@ -124,6 +125,7 @@ const main = async (): Promise<void> => {
       replayId: match.replayId,
       shortId,
       opponentId: `opp-${index}`,
+      opponentName: `对手 ${index + 1}`,
       myChar: match.myChar,
       oppChar: match.oppChar,
       result: match.result,
@@ -206,6 +208,7 @@ const main = async (): Promise<void> => {
       replayId: `bulk-${index}`,
       shortId: bulkId,
       opponentId: `bulk-opp-${index}`,
+      opponentName: `Bulk Opponent ${index}`,
       myChar: 'Cammy',
       oppChar: index % 2 === 0 ? 'Ryu' : 'Ken',
       result: index % 3 === 0 ? 'loss' : 'win',
@@ -255,6 +258,23 @@ const main = async (): Promise<void> => {
     observedAt: start + 26 * 60 * 1000
   })
   seed.close()
+
+  useAppStore.setState({ lastEvent: '新对局 胜 · Ryu' })
+  useAppStore.getState().applyEvent({
+    type: 'session:update',
+    payload: {
+      shortId,
+      startedAt: start,
+      endedAt: start + 60_000,
+      character: 'Ryu',
+      matches: 1,
+      wins: 1,
+      losses: 0,
+      ratingDelta: 10,
+      lpDelta: 20
+    }
+  })
+  assert.equal(useAppStore.getState().lastEvent, '新对局 胜 · Ryu')
 
   const app = await electron.launch({
     args: ['.', `--user-data-dir=${userData}`],
@@ -317,6 +337,11 @@ const main = async (): Promise<void> => {
     await window.click('.nav-item:has-text("会话历史")')
     await window.waitForSelector('.session-table .stats-table-row', { timeout: 5_000 })
     assert.equal(await window.locator('.session-table .stats-table-row').count(), 1)
+    assert.equal(await window.locator('.session-table .stats-table-head span').count(), 8)
+    assert.equal(await window.locator('.session-table .stats-table-row span').count(), 8)
+    assert.ok(
+      (await window.textContent('.session-table .stats-table-head'))?.includes('LP 范围')
+    )
 
     await window.click('.nav-item:has-text("目标与趋势")')
     await window.waitForSelector('.calendar-card', { timeout: 5_000 })
@@ -330,6 +355,25 @@ const main = async (): Promise<void> => {
     await window.waitForSelector('.matchup-table .stats-table-row', { timeout: 5_000 })
     assert.equal(await window.locator('.matchup-table .stats-table-row').count(), 5)
     assert.equal(await window.locator('.rival-table .stats-table-row').count(), 5)
+    const hondaRow = window.locator('.matchup-table .stats-table-row', {
+      hasText: 'Edmond Honda'
+    })
+    assert.match(
+      (await hondaRow.locator('img').getAttribute('src')) ?? '',
+      /\/characters\/e-honda\.png$/
+    )
+    assert.equal(
+      await window.locator('.rival-row .rival-player strong').first().textContent(),
+      '对手 5'
+    )
+    assert.equal(await window.locator('.rival-row .rival-id').first().textContent(), 'opp-4')
+    await window.locator('.rival-row').first().click()
+    await window.waitForSelector('.opponent-card', { timeout: 5_000 })
+    assert.equal(await window.textContent('.page-title'), '对手详情')
+    assert.equal(await window.textContent('.page-subtitle'), '玩家 ID：opp-4')
+    assert.equal(await window.textContent('.opponent-card h2'), '对手 5')
+    await window.click('.page-actions button:has-text("返回对手分析")')
+    await window.waitForSelector('.matchup-table .stats-table-row', { timeout: 5_000 })
     await window.click('.matchup-table .sort-header:has-text("角色")')
     await window.waitForFunction(
       () =>
@@ -640,7 +684,11 @@ const main = async (): Promise<void> => {
     })()
     if (child && !child.killed) child.kill()
     await new Promise((resolve) => setTimeout(resolve, 500))
-    rmSync(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    try {
+      rmSync(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    } catch (error) {
+      console.warn('[ui-selftest] cleanup skipped:', error)
+    }
   }
 }
 

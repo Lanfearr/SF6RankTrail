@@ -172,8 +172,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
           dashboards: withDashboardUpdate(state.dashboards, session.shortId, (dashboard) => ({
             ...dashboard,
             session
-          })),
-          lastEvent: `本会话 ${session.wins} 胜 ${session.losses} 负`
+          }))
         }))
         return
       }

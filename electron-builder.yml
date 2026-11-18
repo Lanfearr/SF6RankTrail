@@ -1,5 +1,5 @@
 appId: com.sf6scorer.app
-productName: SF6 Scorer
+productName: SF6RankTrail
 asar: true
 compression: normal
 directories:
@@ -13,7 +13,7 @@ extraMetadata:
 win:
   target:
     - nsis
-  artifactName: SF6-Scorer-${version}-${arch}.${ext}
+  artifactName: SF6RankTrail-v${version}-${arch}.${ext}
 nsis:
   oneClick: false
   perMachine: false

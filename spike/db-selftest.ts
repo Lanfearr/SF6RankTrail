@@ -15,6 +15,7 @@ const match = {
   replayId: 'replay-1',
   shortId: 'SELF',
   opponentId: 'OPP',
+  opponentName: 'Opponent One',
   myChar: 'Ryu',
   oppChar: 'Ken',
   result: 'win' as const,
@@ -157,8 +158,13 @@ assert.equal(matchups[0]?.winRate, 1)
 const rivals = repo.getRivalStats('SELF')
 assert.equal(rivals.length, 1)
 assert.equal(rivals[0]?.opponentId, 'OPP')
+assert.equal(rivals[0]?.opponentName, 'Opponent One')
 assert.equal(rivals[0]?.matches, 2)
 assert.equal(rivals[0]?.lastResult, 'win')
+
+assert.equal(repo.updateOpponentName('SELF', 'replay-1', 'Updated Opponent'), true)
+assert.equal(repo.listMatches({ shortId: 'SELF' })[1]?.opponentName, 'Updated Opponent')
+assert.equal(repo.getRivalStats('SELF')[0]?.opponentName, 'Opponent One')
 
 const opponentSeasonAt = Date.now() + 180_000
 repo.insertMatch({
@@ -201,6 +207,7 @@ const importMatch: Match = {
   replayId: 'import-1',
   shortId: 'IMPORT',
   opponentId: 'IMPORT-OPP',
+  opponentName: '导入对手',
   myChar: 'Ryu',
   oppChar: 'Ken',
   result: 'win',
@@ -230,15 +237,17 @@ const firstImport = repo.importPlayerData({
 assert.equal(firstImport.matches, 1)
 assert.equal(firstImport.ratings, 1)
 assert.equal(repo.listSessionHistory('IMPORT').length, 1)
+assert.equal(repo.listMatches({ shortId: 'IMPORT' })[0]?.opponentName, '导入对手')
 const secondImport = repo.importPlayerData({
   player: importPlayer,
-  matches: [importMatch],
+  matches: [{ ...importMatch, opponentName: '更新对手' }],
   ratings: [importRating]
 })
 assert.equal(secondImport.matches, 0)
 assert.equal(secondImport.ratings, 0)
 assert.equal(secondImport.skippedMatches, 1)
 assert.equal(secondImport.skippedRatings, 1)
+assert.equal(repo.listMatches({ shortId: 'IMPORT' })[0]?.opponentName, '更新对手')
 assert.equal(repo.deletePlayer('IMPORT'), true)
 
 repo.setSetting('backfill:SELF', '1')

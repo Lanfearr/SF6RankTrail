@@ -461,7 +461,9 @@ function matchesCsv(matches: Match[]): string {
     'opp_mr',
     'my_lp',
     'opp_lp',
-    'season'
+    'season',
+    'opponent_id',
+    'opponent_name'
   ]
   const rows = matches.map((match) =>
     [
@@ -475,7 +477,9 @@ function matchesCsv(matches: Match[]): string {
       match.oppMr,
       match.myLp,
       match.oppLp,
-      match.season
+      match.season,
+      match.opponentId,
+      match.opponentName
     ]
       .map(csvCell)
       .join(',')
@@ -530,6 +534,7 @@ function readImportFile(filePath: string): ImportResult {
         replayId,
         shortId,
         opponentId: optionalString(entry['opponentId']),
+        opponentName: optionalString(entry['opponentName']),
         myChar: optionalString(entry['myChar']),
         oppChar: optionalString(entry['oppChar']),
         result,

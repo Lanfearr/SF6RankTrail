@@ -5,6 +5,7 @@ import { LoadingBlock } from './Page'
 interface Props {
   shortId: string
   opponentId: string | null
+  opponentName?: string | null
 }
 
 const message = (error: unknown): string =>
@@ -18,7 +19,7 @@ const rate = (wins: number, matches: number): string =>
 
 const date = (value: number): string => new Date(value).toLocaleDateString()
 
-export function OpponentInfoCard({ shortId, opponentId }: Props) {
+export function OpponentInfoCard({ shortId, opponentId, opponentName = null }: Props) {
   const [history, setHistory] = useState<OpponentHistory | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState<string | null>(null)
@@ -115,7 +116,7 @@ export function OpponentInfoCard({ shortId, opponentId }: Props) {
     <section className="card opponent-card">
       <div className="card-header">
         <div>
-          <h2>对手信息</h2>
+          <h2>{opponentName ?? '对手信息'}</h2>
           <p className="muted small">
             {opponentId ? `对手 ID：${opponentId}` : '该场对战未记录对手 ID，无法查询 Buckler'}
           </p>

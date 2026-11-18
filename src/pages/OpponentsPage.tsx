@@ -6,6 +6,7 @@ import { EmptyState, LoadingBlock, PageHeader, StatCard } from '../components/Pa
 interface Props {
   shortId: string | null
   lastEvent: string
+  onSelectOpponent: (opponentId: string, opponentName: string | null) => void
 }
 
 type MatchupSortKey = 'character' | 'matches' | 'record' | 'winRate' | 'lastPlayedAt'
@@ -16,7 +17,7 @@ const percent = (value: number): string => `${Math.round(value * 100)}%`
 const resultText = (result: RivalStat['lastResult']): string =>
   result === 'win' ? '胜' : result === 'loss' ? '负' : '平'
 
-export function OpponentsPage({ shortId, lastEvent }: Props) {
+export function OpponentsPage({ shortId, lastEvent, onSelectOpponent }: Props) {
   const [matchups, setMatchups] = useState<MatchupStat[]>([])
   const [rivals, setRivals] = useState<RivalStat[]>([])
   const [loading, setLoading] = useState(false)
@@ -99,11 +100,15 @@ export function OpponentsPage({ shortId, lastEvent }: Props) {
   const ariaSort = (key: MatchupSortKey): 'ascending' | 'descending' | 'none' =>
     sort.key === key ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'
 
+  const openOpponent = (row: RivalStat): void => {
+    onSelectOpponent(row.opponentId, row.opponentName)
+  }
+
   const empty = matchups.length === 0 && rivals.length === 0
 
   return (
     <div className="page">
-      <PageHeader title="对手分析" subtitle="按对手角色与玩家 ID 统计 matchup 和宿敌" />
+      <PageHeader title="对手分析" subtitle="按对手角色与玩家名统计 matchup 和宿敌" />
       {!shortId ? (
         <EmptyState title="尚未选择账号" detail="请先登录或在设置中添加账号。" />
       ) : loading ? (
@@ -195,7 +200,7 @@ export function OpponentsPage({ shortId, lastEvent }: Props) {
               ) : (
                 <div className="stats-table compact-table rival-table">
                   <div className="stats-table-head">
-                    <span>玩家 ID</span>
+                    <span>玩家 / ID</span>
                     <span>对局</span>
                     <span>胜负</span>
                     <span>胜率</span>
@@ -203,10 +208,28 @@ export function OpponentsPage({ shortId, lastEvent }: Props) {
                     <span>最近对局</span>
                   </div>
                   {rivals.map((row) => (
-                    <div className="stats-table-row" key={row.opponentId}>
-                      <strong className="truncate" title={row.opponentId}>
-                        {row.opponentId}
-                      </strong>
+                    <div
+                      className="stats-table-row rival-row"
+                      key={row.opponentId}
+                      role="button"
+                      tabIndex={0}
+                      title="查看对手详情"
+                      aria-label={`查看对手 ${row.opponentName ?? row.opponentId} 的详情`}
+                      onClick={() => openOpponent(row)}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return
+                        event.preventDefault()
+                        openOpponent(row)
+                      }}
+                    >
+                      <span className="rival-player">
+                        <strong className="truncate" title={row.opponentName ?? row.opponentId}>
+                          {row.opponentName ?? '未知玩家'}
+                        </strong>
+                        <span className="rival-id mono truncate" title={row.opponentId}>
+                          {row.opponentId}
+                        </span>
+                      </span>
                       <span>{row.matches}</span>
                       <span>
                         {row.wins}W {row.losses}L

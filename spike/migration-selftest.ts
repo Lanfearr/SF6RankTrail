@@ -121,6 +121,11 @@ try {
     .map((column) => column.name)
   assert.deepEqual(primaryKey, ['short_id', 'replay_id'])
 
+  const matchColumns = (
+    first.db.prepare('PRAGMA table_info(matches)').all() as Array<{ name: string }>
+  ).map((column) => column.name)
+  assert.equal(matchColumns.includes('opponent_name'), true)
+
   const sessionColumns = (
     first.db.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
   ).map((column) => column.name)
@@ -145,6 +150,7 @@ try {
     replayId: 'shared',
     shortId: 'B',
     opponentId: 'OPP-B',
+    opponentName: 'Opponent B',
     myChar: 'Cammy',
     oppChar: 'Juri',
     result: 'win',

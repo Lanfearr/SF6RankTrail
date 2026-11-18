@@ -33,6 +33,7 @@ interface MatchRow {
   replay_id: string
   short_id: string
   opponent_id: string | null
+  opponent_name: string | null
   my_char: string | null
   opp_char: string | null
   result: Match['result']
@@ -113,6 +114,7 @@ const toMatch = (row: MatchRow): Match => ({
   replayId: row.replay_id,
   shortId: row.short_id,
   opponentId: row.opponent_id,
+  opponentName: row.opponent_name,
   myChar: row.my_char,
   oppChar: row.opp_char,
   result: row.result,
@@ -228,14 +230,15 @@ export class Repository {
     const info = this.db
       .prepare(
         `INSERT OR IGNORE INTO matches
-          (replay_id, short_id, opponent_id, my_char, opp_char, result,
+          (replay_id, short_id, opponent_id, opponent_name, my_char, opp_char, result,
            my_mr, opp_mr, my_lp, opp_lp, played_at, season, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         match.replayId,
         match.shortId,
         match.opponentId,
+        match.opponentName,
         match.myChar,
         match.oppChar,
         match.result,
@@ -247,6 +250,18 @@ export class Repository {
         match.season,
         match.createdAt
       ) as unknown as RunResult
+    return Number(info.changes) > 0
+  }
+
+  updateOpponentName(shortId: string, replayId: string, opponentName: string | null): boolean {
+    if (!opponentName || opponentName.trim().length === 0) return false
+    const info = this.db
+      .prepare(
+        `UPDATE matches SET opponent_name = ?
+         WHERE short_id = ? AND replay_id = ?
+           AND COALESCE(opponent_name, '') <> ?`
+      )
+      .run(opponentName, shortId, replayId, opponentName) as unknown as RunResult
     return Number(info.changes) > 0
   }
 
@@ -280,8 +295,12 @@ export class Repository {
           skippedMatches += 1
           continue
         }
-        if (this.insertMatch({ ...match, shortId })) insertedMatches += 1
-        else skippedMatches += 1
+        if (this.insertMatch({ ...match, shortId })) {
+          insertedMatches += 1
+        } else {
+          this.updateOpponentName(shortId, match.replayId, match.opponentName)
+          skippedMatches += 1
+        }
       }
 
       for (const point of input.ratings) {
@@ -930,6 +949,10 @@ export class Repository {
                 SUM(CASE WHEN m.result = 'win' THEN 1 ELSE 0 END) AS wins,
                 SUM(CASE WHEN m.result = 'loss' THEN 1 ELSE 0 END) AS losses,
                 MAX(m.played_at) AS last_played_at,
+                (SELECT m2.opponent_name FROM matches m2
+                 WHERE m2.short_id = m.short_id AND m2.opponent_id = m.opponent_id
+                   AND m2.opponent_name IS NOT NULL AND TRIM(m2.opponent_name) <> ''
+                 ORDER BY m2.played_at DESC, m2.replay_id DESC LIMIT 1) AS opponent_name,
                 (SELECT m2.result FROM matches m2
                  WHERE m2.short_id = m.short_id AND m2.opponent_id = m.opponent_id
                  ORDER BY m2.played_at DESC LIMIT 1) AS last_result
@@ -941,6 +964,7 @@ export class Repository {
       )
       .all(shortId, Math.max(1, limit)) as unknown as Array<{
       opponent_id: string
+      opponent_name: string | null
       matches: number
       wins: number
       losses: number
@@ -953,6 +977,7 @@ export class Repository {
       const wins = Number(row.wins)
       return {
         opponentId: row.opponent_id,
+        opponentName: row.opponent_name,
         matches,
         wins,
         losses: Number(row.losses),

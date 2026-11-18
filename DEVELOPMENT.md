@@ -1,7 +1,7 @@
-# SF6 Scorer 开发文档
+# SF6RankTrail 开发文档
 
 > 实时显示《街头霸王6》LP/MR 分数变化趋势的桌面应用
-> 版本：v0.1（技术栈已锁定）
+> 版本：v1.1.1（技术栈已锁定）
 > 状态：开发文档
 
 ---
@@ -185,6 +185,7 @@ CREATE TABLE IF NOT EXISTS matches (
   replay_id     TEXT NOT NULL,
   short_id      TEXT NOT NULL REFERENCES players(short_id),
   opponent_id   TEXT,
+  opponent_name TEXT,
   my_char       TEXT,
   opp_char      TEXT,
   result        TEXT NOT NULL CHECK (result IN ('win','loss','draw')),
@@ -302,7 +303,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 - 登录：`loginWithChrome()` 启动普通 Chrome（独立 profile + 动态调试端口），等待用户手动登录；通过 `__NEXT_DATA__` 的 `loginUser.flg`、退出文案与 `/profile/{id}/` 链接识别登录成功，随后通过 `connectOverCDP` 读取 Cookie、UA 与 UA-CH，保存 `session.json` 并关闭 Chrome。
 - 采集：`ElectronBucklerSource` 把 `session.json` 的 Cookie 导入 Electron session，使用 `session.fetch` 打开 `battlelog/rank`，解析 `__NEXT_DATA__`；全程无可见窗口。
-- 分页：首次同步按页抓取全部可查询场次（读取 `total_page`，遇到空页/重复页停止，上限 200 页），完成后记录 `lastFullScanAt:<shortId>` 与 `backfill:<shortId>`；后续轮询从第 1 页增量抓取，只有在整页都没有新增场次时才停止，并继续多扫描一页作为边界缓冲。启动时及运行中每 1 小时执行一次全量核对，补齐分页边界或延迟上传的遗漏；全量失败时回退增量同步，5 分钟后重试。手动重扫强制全量检查当前账号，返回 `fullScanError`、`oldestFetchedAt`、`newestFetchedAt`；诊断页用右下角浮动提示展示扫描中/成功/无新增/失败状态，最终结果 10 秒后自动关闭，也可手动关闭。Buckler 只公开最近约 100 场（10 页），超出窗口的历史无法重新抓取。批量回填只推送最新一条评分事件，避免 UI 抖动。对局时间取自 `uploaded_at`（Unix 秒）；昵称取自 `fighter_banner_info.personal_info.fighter_id`，仅在 `display_name` 为空时自动补全；单个账号抓取失败只发 `sync:warning`，不阻塞其他账号。
+- 分页：首次同步按页抓取全部可查询场次（读取 `total_page`，遇到空页/重复页停止，上限 200 页），完成后记录 `lastFullScanAt:<shortId>` 与 `backfill:<shortId>`；后续轮询从第 1 页增量抓取，只有在整页都没有新增场次时才停止，并继续多扫描一页作为边界缓冲。启动时及运行中每 1 小时执行一次全量核对，补齐分页边界或延迟上传的遗漏；全量失败时回退增量同步，5 分钟后重试。手动重扫强制全量检查当前账号，返回 `fullScanError`、`oldestFetchedAt`、`newestFetchedAt`；诊断页用右下角浮动提示展示扫描中/成功/无新增/失败状态，最终结果 10 秒后自动关闭，也可手动关闭。Buckler 只公开最近约 100 场（10 页），超出窗口的历史无法重新抓取。批量回填只推送最新一条评分事件，避免 UI 抖动。对局时间取自 `uploaded_at`（Unix 秒）；昵称取自 `fighter_banner_info.personal_info.fighter_id`，仅在 `display_name` 为空时自动补全；对手名取自 battlelog 的 `player1_info.player.fighter_id` / `player2_info.player.fighter_id`，用于宿敌列表，并在同步时补全已有场次的名字；单个账号抓取失败只发 `sync:warning`，不阻塞其他账号。
 - 同步：`SyncService` 每 20s 拉取一次，按 `(short_id, replay_id)` 去重；新对局、评分和当前评分在同一事务内写入 `matches` 与 `rating_points`，提交后广播事件并重建 `sessions`。手动重扫只创建同步服务、不启动全账号轮询；停止同步时等待在途队列结束。
 - 当前分数：每轮同步比赛后额外抓取资料页，解析 `character_league_infos` 的 MR/LP，写入 `rating_points(source='snapshot')`；抓取失败只发一次 `当前分数获取失败` 告警，不阻塞对局同步。
 - 推送：新对局/评分/会话通过 `RealtimeHub` 广播；同步状态同时写入快照。
@@ -372,12 +373,12 @@ type ServerEvent =
 - 顶栏：当前账号选择、同步状态、打开图表弹窗
 - 页面顺序：概览、会话历史、目标与趋势、对战记录、对战详情、角色统计、对手分析、赛季报告、数据导出/备份、数据同步、设置（最后一项）
 - 概览：当前 MR/LP、本会话净上分、胜率、同步状态、最近对局
-- 会话历史：按 3 小时会话切分展示开始时间、时长、对局、胜负、MR/LP 净分和 MR 范围
+- 会话历史：按 3 小时会话切分展示开始时间、时长、对局、胜负、MR/LP 净分和 MR/LP 范围
 - 目标与趋势：按账号保存目标 MR/LP、显示目标进度、近期场均、预计场次、连胜/连败和近 12 周热力图
 - 对战记录：按 MR/LP、结果、角色、日期筛选并分页；点击进入对战详情
 - 对战详情：双方角色、赛前分数、单场变化、对手分数、时间/赛季/replay_id
 - 角色统计：各角色对局数、胜负、胜率、当前 MR/LP、最后对局
-- 对手分析：按对手角色汇总 matchup，按 opponent_id 追踪宿敌与最近结果
+- 对手分析：按对手角色汇总 matchup，按对手名/opponent_id 追踪宿敌与最近结果，点击宿敌进入对手详情
 - 赛季报告：按 season 或月份汇总对局、胜率、MR/LP 范围
 - 数据导出/备份：CSV、完整 JSON、JSON 恢复导入、SQLite 数据库备份
 - 数据同步：登录状态、数据量、最近同步/对局、状态历史；当前账号手动重扫与浮动结果提示
@@ -542,6 +543,8 @@ npm run spike:m0 -- --short-id <Buckler_ID> --channel chrome --dump
 | 2026-11-12 | 重扫反馈       | 手动重扫仅针对当前账号；诊断页新增浮动提示，展示扫描中/成功/无新增/失败、扫描场次与时间范围，最终结果 10 秒自动关闭并可手动关闭；同步结果新增完整扫描错误与时间范围；补充分页/失败回退/重扫测试及 Buckler 100 场窗口说明 |
 | 2026-11-12 | 数据正确性     | 版本升至 0.1.5；`matches` 改为 `(short_id, replay_id)` 复合主键并新增 v1 迁移备份；会话按最后一场角色计算，结束分仅用赛后观测，缺失显示 `—`；对局/评分/当前分数事务化；单账号重扫不再启动全账号轮询，停止同步等待队列；新增迁移/复合主键/事务回滚测试 |
 | 2026-11-18 | 对手信息/跳转  | 版本升至 1.0.0；对战详情新增对手信息卡，按赛季/角色汇总本地交手记录并显示交手时对手 MR/LP；按需查询 Buckler 赛季列表与段位（含历史最高），主进程缓存 10 分钟；概览与 Pro 图表对手头像可跳转对应详情；补齐缺失的 `buildCharacterRatingDeltas` |
+| 2026-11-18 | 宿敌追踪       | 版本升至 1.1.0；宿敌列表显示对手玩家名与 ID，点击或键盘选择进入对手详情页；从 battlelog `player.fighter_id` 采集对手名并写入 `matches.opponent_name`，同步/导入时补全已有场次；CSV 导出追加对手 ID 与名字；新增迁移、Repository、同步与 UI 自测 |
+| 2026-11-18 | 问题修复       | 版本升至 1.1.1；会话事件不再覆盖左下角最近事件；会话历史新增 LP 范围；补齐 `Edmond Honda` 头像映射；UI 自测覆盖会话列、头像映射与会话事件回归 |
 
 ---
 

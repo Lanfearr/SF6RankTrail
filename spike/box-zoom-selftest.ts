@@ -38,6 +38,7 @@ const main = async (): Promise<void> => {
       replayId: `history-${index}`,
       shortId: historyId,
       opponentId: `opp-${index}`,
+      opponentName: `Opponent ${index}`,
       myChar: 'Ryu',
       oppChar: index % 2 === 0 ? 'Ken' : 'Cammy',
       result: index % 3 === 0 ? 'loss' : 'win',

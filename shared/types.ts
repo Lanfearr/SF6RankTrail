@@ -17,6 +17,7 @@ export interface Match {
   replayId: string
   shortId: string
   opponentId: string | null
+  opponentName: string | null
   myChar: string | null
   oppChar: string | null
   result: MatchResult
@@ -70,6 +71,7 @@ export interface MatchupStat {
 
 export interface RivalStat {
   opponentId: string
+  opponentName: string | null
   matches: number
   wins: number
   losses: number

@@ -6,6 +6,7 @@ import { DiagnosticsPage } from './pages/DiagnosticsPage'
 import { ExportPage } from './pages/ExportPage'
 import { MatchDetailPage } from './pages/MatchDetailPage'
 import { MatchesPage } from './pages/MatchesPage'
+import { OpponentDetailPage } from './pages/OpponentDetailPage'
 import { OpponentsPage } from './pages/OpponentsPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { ProgressPage } from './pages/ProgressPage'
@@ -22,6 +23,7 @@ type Page =
   | 'detail'
   | 'characters'
   | 'opponents'
+  | 'opponent'
   | 'season'
   | 'export'
   | 'diagnostics'
@@ -54,6 +56,10 @@ export default function App() {
 
   const [page, setPage] = useState<Page>('overview')
   const [selectedMatch, setSelectedMatch] = useState<Match | null>(null)
+  const [selectedOpponent, setSelectedOpponent] = useState<{
+    id: string
+    name: string | null
+  } | null>(null)
   const [version, setVersion] = useState('')
 
   useEffect(() => {
@@ -64,6 +70,15 @@ export default function App() {
     setSelectedMatch(match)
     setPage('detail')
   }
+
+  const openOpponent = (opponentId: string, opponentName: string | null): void => {
+    setSelectedOpponent({ id: opponentId, name: opponentName })
+    setPage('opponent')
+  }
+
+  useEffect(() => {
+    setSelectedOpponent(null)
+  }, [activeShortId])
 
   useEffect(
     () =>
@@ -89,7 +104,21 @@ export default function App() {
       case 'characters':
         return <CharactersPage shortId={activeShortId} lastEvent={lastEvent} />
       case 'opponents':
-        return <OpponentsPage shortId={activeShortId} lastEvent={lastEvent} />
+        return (
+          <OpponentsPage
+            shortId={activeShortId}
+            lastEvent={lastEvent}
+            onSelectOpponent={openOpponent}
+          />
+        )
+      case 'opponent':
+        return (
+          <OpponentDetailPage
+            shortId={activeShortId}
+            opponent={selectedOpponent}
+            onBack={() => setPage('opponents')}
+          />
+        )
       case 'season':
         return <SeasonPage shortId={activeShortId} lastEvent={lastEvent} />
       case 'export':
@@ -148,7 +177,11 @@ export default function App() {
           {NAV.map((item) => (
             <button
               key={item.page}
-              className={page === item.page ? 'nav-item active' : 'nav-item'}
+              className={
+                page === item.page || (page === 'opponent' && item.page === 'opponents')
+                  ? 'nav-item active'
+                  : 'nav-item'
+              }
               onClick={() => setPage(item.page)}
             >
               {item.label}

@@ -4,6 +4,8 @@ const ALIASES: Record<string, string> = {
   'm. bison': 'm-bison',
   'c. viper': 'c-viper',
   'e. honda': 'e-honda',
+  'edmond honda': 'e-honda',
+  honda: 'e-honda',
   'dee jay': 'dee-jay',
   'chun-li': 'chun-li',
   jp: 'jp'
@@ -14,6 +16,8 @@ const COMPACT_ALIASES: Record<string, string> = {
   mbison: 'm-bison',
   cviper: 'c-viper',
   ehonda: 'e-honda',
+  edmondhonda: 'e-honda',
+  honda: 'e-honda',
   deejay: 'dee-jay',
   chunli: 'chun-li',
   jp: 'jp'

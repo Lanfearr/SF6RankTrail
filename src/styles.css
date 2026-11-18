@@ -1813,7 +1813,7 @@ button.chart-icon:focus-visible {
 
 .session-table .stats-table-head,
 .session-table .stats-table-row {
-  grid-template-columns: 1.35fr 0.75fr 0.5fr 0.65fr 0.7fr 0.7fr 1.1fr;
+  grid-template-columns: 1.25fr 0.65fr 0.45fr 0.6fr 0.65fr 0.65fr 1fr 1fr;
 }
 
 .compact-table {
@@ -1835,7 +1835,36 @@ button.chart-icon:focus-visible {
 
 .rival-table .stats-table-head,
 .rival-table .stats-table-row {
-  grid-template-columns: 1.1fr 0.45fr 0.65fr 1fr 0.65fr 0.8fr;
+  grid-template-columns: 1.35fr 0.45fr 0.65fr 1fr 0.65fr 0.8fr;
+}
+
+.rival-player {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rival-player strong {
+  color: #f4f4f5;
+}
+
+.rival-id {
+  color: #9ca3af;
+  font-size: 10px;
+}
+
+.rival-row {
+  cursor: pointer;
+}
+
+.rival-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.rival-row:focus-visible {
+  outline: 1px solid #f59e0b;
+  outline-offset: -2px;
 }
 
 .truncate {
