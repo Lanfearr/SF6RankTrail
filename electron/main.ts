@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import {
   copyFileSync,
   mkdirSync,
@@ -35,6 +35,7 @@ import {
   closeActiveLogin,
   hasSavedSession,
   loginWithChrome,
+  profileUrl,
   type LoginOptions
 } from './collector/auth'
 import { ElectronBucklerSource } from './collector/electron-fetcher'
@@ -499,7 +500,7 @@ const optionalNumber = (value: unknown): number | null =>
 function readImportFile(filePath: string): ImportResult {
   const raw = JSON.parse(readFileSync(filePath, 'utf8')) as unknown
   if (!isRecord(raw) || !isRecord(raw['player'])) {
-    throw new Error('不是有效的 SF6 Scorer JSON 备份')
+    throw new Error('不是有效的 SF6 RankTrail JSON 备份')
   }
   const playerRaw = raw['player']
   const shortId = playerRaw['shortId']
@@ -684,6 +685,11 @@ function registerIpc(): void {
   ipcMain.handle('opponents:seasons', async (_event, opponentId: string) => {
     const info = await requireBucklerSource().fetchOpponentSeasons(opponentId)
     return { opponentId, ...info }
+  })
+
+  ipcMain.handle('buckler:openProfile', async (_event, shortId: string) => {
+    if (!/^\d{1,12}$/.test(shortId)) throw new Error('无效的玩家 ID')
+    await shell.openExternal(profileUrl(shortId))
   })
 
   ipcMain.handle(

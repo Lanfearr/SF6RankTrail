@@ -48,7 +48,7 @@ export function ChartApp() {
   return (
     <div className={mode === 'pro' ? 'app pro-mode' : 'app'}>
       <header className="titlebar">
-        <span className="brand">SF6 Scorer</span>
+        <span className="brand">SF6 RankTrail</span>
         <div className="titlebar-actions">
           <button
             className={mode === 'mini' ? 'chip active' : 'chip'}

@@ -1,6 +1,6 @@
 {
   "name": "sf6scorer",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Real-time Street Fighter 6 LP/MR trend tracker with OBS overlay",
   "main": "./out/main/index.js",
   "private": true,

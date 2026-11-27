@@ -5,7 +5,7 @@ const overlayHtml = (port: number): string => `<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <title>SF6 Scorer Overlay</title>
+    <title>SF6 RankTrail Overlay</title>
     <style>
       html, body { margin: 0; background: transparent; overflow: hidden; }
       body { font-family: system-ui, 'Segoe UI', sans-serif; color: #fff; }

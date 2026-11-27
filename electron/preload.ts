@@ -22,6 +22,7 @@ const api: IpcApi = {
   opponentSeasons: (opponentId) => ipcRenderer.invoke('opponents:seasons', opponentId),
   opponentLeagueInfo: (opponentId, seasonId, force) =>
     ipcRenderer.invoke('opponents:leagueInfo', opponentId, seasonId, force),
+  openBucklerProfile: (shortId) => ipcRenderer.invoke('buckler:openProfile', shortId),
   diagnostics: (shortId) => ipcRenderer.invoke('diagnostics:get', shortId),
   refreshSession: (shortId) => ipcRenderer.invoke('session:refresh', shortId),
   rescanHistory: (shortId) => ipcRenderer.invoke('sync:rescan', shortId),

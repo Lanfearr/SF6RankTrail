@@ -2,6 +2,7 @@ import type {
   CurrentRating,
   Match,
   MatchResult,
+  OpponentFightAchievements,
   OpponentLeagueCharacter
 } from '../../shared/types'
 
@@ -26,6 +27,14 @@ const asNumber = (v: unknown): number | null => {
   if (typeof v === 'number' && Number.isFinite(v)) return Math.round(v)
   if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) {
     return Math.round(Number(v))
+  }
+  return null
+}
+
+const asFloat = (v: unknown): number | null => {
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) {
+    return Number(v)
   }
   return null
 }
@@ -144,14 +153,84 @@ export function parseCurrentRatings(data: unknown): CurrentRating[] {
 export interface PlayerSeasonInfo {
   currentSeasonId: number | null
   seasonIds: number[]
+  achievements: OpponentFightAchievements | null
+}
+
+export function parseFightAchievements(play: unknown): OpponentFightAchievements | null {
+  if (!isObject(play)) return null
+  const stats = isObject(play.battle_stats) ? play.battle_stats : null
+  if (!stats) return null
+
+  const count = (key: string): number => asFloat(stats[key]) ?? 0
+  const total = (key: string): number => asNumber(stats[key]) ?? 0
+
+  return {
+    trend: {
+      driveGaugeRate: {
+        driveParry: count('gauge_rate_drive_guard'),
+        driveImpact: count('gauge_rate_drive_impact'),
+        driveArts: count('gauge_rate_drive_arts'),
+        driveRushFromParry: count('gauge_rate_drive_rush_from_parry'),
+        driveRushFromCancel: count('gauge_rate_drive_rush_from_cancel'),
+        driveReversal: count('gauge_rate_drive_reversal'),
+        other: count('gauge_rate_drive_other')
+      },
+      driveReversalCount: count('drive_reversal'),
+      driveParry: {
+        success: count('drive_parry'),
+        throwOpponent: count('throw_drive_parry'),
+        receivedThrow: count('received_throw_drive_parry'),
+        justParry: count('just_parry')
+      },
+      driveImpact: {
+        success: count('drive_impact'),
+        punishCounter: count('punish_counter'),
+        clash: count('drive_impact_to_drive_impact'),
+        received: count('received_drive_impact'),
+        receivedPunishCounter: count('received_punish_counter'),
+        receivedClash: count('received_drive_impact_to_drive_impact')
+      },
+      superArtsRate: {
+        lv1: count('gauge_rate_sa_lv1'),
+        lv2: count('gauge_rate_sa_lv2'),
+        lv3: count('gauge_rate_sa_lv3'),
+        ca: count('gauge_rate_ca')
+      },
+      stun: {
+        dealt: count('stun'),
+        received: count('received_stun')
+      },
+      throw: {
+        success: count('throw_count'),
+        received: count('received_throw_count'),
+        tech: count('throw_tech')
+      },
+      corner: {
+        opponentTime: count('corner_time'),
+        selfTime: count('cornered_time')
+      }
+    },
+    totals: {
+      rankedMatches: total('rank_match_play_count'),
+      casualMatches: total('casual_match_play_count'),
+      customRoomMatches: total('custom_room_match_play_count'),
+      battleHubMatches: total('battle_hub_match_play_count'),
+      totalFightPoints: total('total_all_character_play_point'),
+      challengeClearCount: total('target_clear_count')
+    },
+    rivalAi: {
+      highestRank: asString(stats.rival_ai_highest_league_rank_txt),
+      challengeCount: total('rival_ai_achieved_challenge_count')
+    }
+  }
 }
 
 export function parsePlayerSeasonInfo(data: unknown): PlayerSeasonInfo {
-  if (!isObject(data)) return { currentSeasonId: null, seasonIds: [] }
+  if (!isObject(data)) return { currentSeasonId: null, seasonIds: [], achievements: null }
   const props = isObject(data.props) ? data.props : data
   const pageProps = isObject(props.pageProps) ? props.pageProps : props
   const play = isObject(pageProps.play) ? pageProps.play : null
-  if (!play) return { currentSeasonId: null, seasonIds: [] }
+  if (!play) return { currentSeasonId: null, seasonIds: [], achievements: null }
 
   const currentSeasonId = asNumber(pick(play, ['current_season_id', 'currentSeasonId']))
   const rawSeasonIds = pick(play, ['season_ids', 'seasonIds'])
@@ -162,7 +241,7 @@ export function parsePlayerSeasonInfo(data: unknown): PlayerSeasonInfo {
       if (id !== null && !seasonIds.includes(id)) seasonIds.push(id)
     }
   }
-  return { currentSeasonId, seasonIds }
+  return { currentSeasonId, seasonIds, achievements: parseFightAchievements(play) }
 }
 
 export function parseOpponentLeagueInfo(data: unknown): OpponentLeagueCharacter[] {

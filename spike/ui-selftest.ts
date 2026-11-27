@@ -283,7 +283,7 @@ const main = async (): Promise<void> => {
   try {
     const window = await app.firstWindow()
     await window.waitForSelector('.main-shell', { timeout: 15_000 })
-    assert.equal(await window.textContent('.main-brand strong'), 'SF6 Scorer')
+    assert.equal(await window.textContent('.main-brand strong'), 'SF6 RankTrail')
 
     const nav = await window.locator('.nav-item').allTextContents()
     assert.deepEqual(nav, [
@@ -445,7 +445,7 @@ const main = async (): Promise<void> => {
     await window.click('.main-header-actions button:has-text("打开图表")')
     const chart = await chartPromise
     await chart.waitForSelector('.app', { timeout: 10_000 })
-    assert.equal(await chart.textContent('.brand'), 'SF6 Scorer')
+    assert.equal(await chart.textContent('.brand'), 'SF6 RankTrail')
     assert.equal(await chart.isVisible('.mini'), true)
     await chart.waitForFunction(
       () => document.querySelector('.rating-value')?.textContent === '1,850',

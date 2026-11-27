@@ -202,10 +202,77 @@ export interface OpponentHistory {
   seasons: OpponentSeason[]
 }
 
+export interface OpponentDriveGaugeRate {
+  driveParry: number
+  driveImpact: number
+  driveArts: number
+  driveRushFromParry: number
+  driveRushFromCancel: number
+  driveReversal: number
+  other: number
+}
+
+export interface OpponentTrendStats {
+  driveGaugeRate: OpponentDriveGaugeRate
+  driveReversalCount: number
+  driveParry: {
+    success: number
+    throwOpponent: number
+    receivedThrow: number
+    justParry: number
+  }
+  driveImpact: {
+    success: number
+    punishCounter: number
+    clash: number
+    received: number
+    receivedPunishCounter: number
+    receivedClash: number
+  }
+  superArtsRate: {
+    lv1: number
+    lv2: number
+    lv3: number
+    ca: number
+  }
+  stun: {
+    dealt: number
+    received: number
+  }
+  throw: {
+    success: number
+    received: number
+    tech: number
+  }
+  corner: {
+    opponentTime: number
+    selfTime: number
+  }
+}
+
+export interface OpponentFightTotals {
+  rankedMatches: number
+  casualMatches: number
+  customRoomMatches: number
+  battleHubMatches: number
+  totalFightPoints: number
+  challengeClearCount: number
+}
+
+export interface OpponentFightAchievements {
+  trend: OpponentTrendStats
+  totals: OpponentFightTotals
+  rivalAi: {
+    highestRank: string | null
+    challengeCount: number
+  }
+}
+
 export interface OpponentSeasonSummary {
   opponentId: string
   currentSeasonId: number | null
   seasonIds: number[]
+  achievements: OpponentFightAchievements | null
 }
 
 export interface OpponentLeagueCharacter {
@@ -318,6 +385,7 @@ export interface IpcApi {
     seasonId: number,
     force?: boolean
   ) => Promise<OpponentLeagueInfo>
+  openBucklerProfile: (shortId: string) => Promise<void>
   diagnostics: (shortId: string) => Promise<Diagnostics>
   refreshSession: (shortId: string) => Promise<SessionSummary | null>
   rescanHistory: (shortId: string) => Promise<SyncResult>

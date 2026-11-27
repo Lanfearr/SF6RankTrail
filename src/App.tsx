@@ -134,7 +134,7 @@ export default function App() {
     <div className="main-shell">
       <header className="main-header">
         <div className="main-brand">
-          <strong>SF6 Scorer</strong>
+          <strong>SF6 RankTrail</strong>
           <span className="muted">Street Fighter 6 战绩面板</span>
         </div>
         <div className="main-header-actions">
