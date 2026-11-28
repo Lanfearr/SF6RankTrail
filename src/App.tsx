@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Match } from '@shared/types'
+import type { Match, UpdateCheckResult } from '@shared/types'
 import { useRealtime } from './lib/useRealtime'
 import { CharactersPage } from './pages/CharactersPage'
 import { DiagnosticsPage } from './pages/DiagnosticsPage'
@@ -61,9 +61,22 @@ export default function App() {
     name: string | null
   } | null>(null)
   const [version, setVersion] = useState('')
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null)
+  const [updateDismissed, setUpdateDismissed] = useState(false)
 
   useEffect(() => {
     void window.api.getVersion().then(setVersion)
+  }, [])
+
+  useEffect(() => {
+    void window.api.getUpdateState().then((state) => {
+      if (state?.available) setUpdateInfo(state)
+    })
+    return window.api.onUpdateAvailable((result) => {
+      if (!result.available) return
+      setUpdateInfo(result)
+      setUpdateDismissed(false)
+    })
   }, [])
 
   const openMatch = (match: Match): void => {
@@ -169,6 +182,22 @@ export default function App() {
           <button className="btn small" onClick={clearWarning}>
             忽略
           </button>
+        </div>
+      )}
+
+      {updateInfo?.available && !updateDismissed && (
+        <div className="banner update-banner">
+          <span>
+            发现新版本 v{updateInfo.latestVersion}（当前 v{updateInfo.currentVersion}）
+          </span>
+          <div className="button-row">
+            <button className="btn small primary" onClick={() => setPage('settings')}>
+              查看更新
+            </button>
+            <button className="btn small" onClick={() => setUpdateDismissed(true)}>
+              忽略
+            </button>
+          </div>
         </div>
       )}
 

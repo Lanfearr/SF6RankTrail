@@ -1,7 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { AutoBackupStatus, ChartMode } from '@shared/types'
+import type {
+  AutoBackupStatus,
+  ChartMode,
+  UpdateCheckResult,
+  UpdateProgress
+} from '@shared/types'
 import { PageHeader } from '../components/Page'
 import { useAppStore } from '../store/useAppStore'
+
+const fileSize = (bytes: number | null): string => {
+  if (!bytes || bytes <= 0) return '未知大小'
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+const updatePhaseText = (progress: UpdateProgress): string => {
+  if (progress.phase === 'verifying') return '正在校验安装包…'
+  if (progress.phase === 'ready') return '安装包已就绪'
+  if (progress.phase === 'installing') return '正在启动安装向导…'
+  if (progress.phase === 'error') return progress.message
+  return `正在下载… ${progress.percent}%`
+}
 
 export function SettingsPage() {
   const players = useAppStore((state) => state.players)
@@ -25,6 +43,11 @@ export function SettingsPage() {
   const [backupStatus, setBackupStatus] = useState<AutoBackupStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [version, setVersion] = useState('')
+  const [updateState, setUpdateState] = useState<UpdateCheckResult | null>(null)
+  const [checkingUpdate, setCheckingUpdate] = useState(false)
+  const [installingUpdate, setInstallingUpdate] = useState(false)
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null)
 
   const active = useMemo(
     () => players.find((player) => player.shortId === activeShortId) ?? null,
@@ -75,6 +98,11 @@ export function SettingsPage() {
       if (Number.isFinite(next)) setOpacity(Math.min(1, Math.max(0.2, next)))
     })
     void loadBackupStatus()
+    void window.api.getVersion().then(setVersion)
+    void window.api.getUpdateState().then((state) => {
+      if (state) setUpdateState(state)
+    })
+    return window.api.onUpdateProgress((progress) => setUpdateProgress(progress))
   }, [])
 
   const run = async (action: () => Promise<unknown>, label?: string): Promise<void> => {
@@ -120,6 +148,30 @@ export function SettingsPage() {
   const applyOpacity = (value: number): void => {
     setOpacity(value)
     window.api.chartSetOpacity(value)
+  }
+
+  const checkUpdates = async (): Promise<void> => {
+    setCheckingUpdate(true)
+    setUpdateProgress(null)
+    try {
+      const result = await window.api.checkForUpdates(true)
+      setUpdateState(result)
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }
+
+  const installUpdate = async (): Promise<void> => {
+    setInstallingUpdate(true)
+    setUpdateProgress(null)
+    try {
+      const result = await window.api.downloadAndInstallUpdate()
+      if (!result.ok && result.message) setMessage(result.message)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setInstallingUpdate(false)
+    }
   }
 
   const overlayUrl = active
@@ -329,6 +381,87 @@ export function SettingsPage() {
           <p className="muted small">
             将地址添加为 OBS 浏览器源。使用 player 参数锁定当前账号；也可以省略参数自动跟随主账号。
           </p>
+        </section>
+
+        <section className="card">
+          <div className="card-header">
+            <h2>软件更新</h2>
+            <span className="badge">当前 v{version || '…'}</span>
+          </div>
+          <p className="muted small">
+            从 GitHub Releases 检查最新版本，发现更新后可下载并启动安装向导。
+          </p>
+          <div className="button-row">
+            <button
+              className="btn"
+              disabled={checkingUpdate || installingUpdate}
+              onClick={() => void checkUpdates()}
+            >
+              {checkingUpdate ? '检查中…' : '检查更新'}
+            </button>
+            {updateState?.available && (
+              <button
+                className="btn primary"
+                disabled={installingUpdate}
+                onClick={() => void installUpdate()}
+              >
+                {installingUpdate ? '处理中…' : '下载并安装'}
+              </button>
+            )}
+          </div>
+
+          {updateState?.error && <p className="update-error">{updateState.error}</p>}
+
+          {!updateState?.error && updateState?.available && updateState.release && (
+            <>
+              <div className="kv-list compact">
+                <div>
+                  <span>最新版本</span>
+                  <strong>v{updateState.release.version}</strong>
+                </div>
+                <div>
+                  <span>安装包</span>
+                  <strong className="truncate" title={updateState.release.assetName ?? ''}>
+                    {updateState.release.assetName ?? '未提供'}
+                  </strong>
+                </div>
+                <div>
+                  <span>大小</span>
+                  <strong>{fileSize(updateState.release.assetSize)}</strong>
+                </div>
+              </div>
+              {updateState.release.notes && (
+                <details className="update-notes">
+                  <summary>更新说明</summary>
+                  <pre>{updateState.release.notes}</pre>
+                </details>
+              )}
+            </>
+          )}
+
+          {!updateState?.error &&
+            updateState &&
+            !updateState.available &&
+            updateState.latestVersion && (
+              <p className="muted small">已是最新版本（v{updateState.latestVersion}）。</p>
+            )}
+
+          {!updateState && <p className="muted small">尚未检查更新。</p>}
+
+          {updateProgress && updateProgress.phase !== 'error' && (
+            <div className="update-progress">
+              <div className="update-progress-bar">
+                <span
+                  style={{ width: `${Math.min(100, Math.max(0, updateProgress.percent))}%` }}
+                />
+              </div>
+              <span className="muted small">{updatePhaseText(updateProgress)}</span>
+            </div>
+          )}
+
+          {updateProgress?.phase === 'error' && (
+            <p className="update-error">{updateProgress.message}</p>
+          )}
         </section>
       </div>
 

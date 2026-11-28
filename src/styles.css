@@ -698,6 +698,59 @@ button.chart-icon:focus-visible {
   font-size: 12px;
 }
 
+.update-banner {
+  background: rgba(96, 165, 250, 0.14);
+  border-color: rgba(96, 165, 250, 0.4);
+}
+
+.update-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 12px;
+}
+
+.update-notes summary {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #9ca3af;
+  cursor: pointer;
+}
+
+.update-notes pre {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  color: #d4d4d8;
+  background: #15151c;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.update-progress-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.update-progress-bar span {
+  display: block;
+  height: 100%;
+  background: #60a5fa;
+  transition: width 0.2s ease;
+}
+
 /* Main window shell */
 .main-shell {
   height: 100%;

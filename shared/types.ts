@@ -363,6 +363,47 @@ export interface RatingQuery {
   to?: number
 }
 
+export interface UpdateReleaseInfo {
+  version: string
+  tag: string
+  name: string | null
+  notes: string | null
+  publishedAt: number | null
+  assetName: string | null
+  assetSize: number | null
+  downloadUrl: string | null
+  sha256: string | null
+}
+
+export interface UpdateCheckResult {
+  currentVersion: string
+  latestVersion: string | null
+  available: boolean
+  release: UpdateReleaseInfo | null
+  checkedAt: number
+  error: string | null
+}
+
+export type UpdatePhase =
+  | 'downloading'
+  | 'verifying'
+  | 'ready'
+  | 'installing'
+  | 'error'
+
+export interface UpdateProgress {
+  phase: UpdatePhase
+  percent: number
+  receivedBytes: number
+  totalBytes: number
+  message: string
+}
+
+export interface UpdateInstallResult {
+  ok: boolean
+  message?: string
+}
+
 export interface IpcApi {
   authLogin: (input: PlayerInput) => Promise<LoginResult>
   authStatus: () => Promise<{ loggedIn: boolean; shortId?: string }>
@@ -393,6 +434,11 @@ export interface IpcApi {
   syncStop: () => Promise<void>
   syncStatus: () => Promise<SyncStatus>
   getVersion: () => Promise<string>
+  checkForUpdates: (force?: boolean) => Promise<UpdateCheckResult>
+  getUpdateState: () => Promise<UpdateCheckResult | null>
+  downloadAndInstallUpdate: () => Promise<UpdateInstallResult>
+  onUpdateProgress: (listener: (progress: UpdateProgress) => void) => () => void
+  onUpdateAvailable: (listener: (result: UpdateCheckResult) => void) => () => void
   getSetting: (key: string) => Promise<string | null>
   setSetting: (key: string, value: string) => Promise<void>
   exportMatchesCsv: (shortId: string) => Promise<ExportResult>

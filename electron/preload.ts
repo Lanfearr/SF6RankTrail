@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import type { IpcApi, Match } from '../shared/types'
+import type { IpcApi, Match, UpdateCheckResult, UpdateProgress } from '../shared/types'
 
 const api: IpcApi = {
   authLogin: (input) => ipcRenderer.invoke('auth:login', input),
@@ -30,6 +30,19 @@ const api: IpcApi = {
   syncStop: () => ipcRenderer.invoke('sync:stop'),
   syncStatus: () => ipcRenderer.invoke('sync:status'),
   getVersion: () => ipcRenderer.invoke('app:version'),
+  checkForUpdates: (force) => ipcRenderer.invoke('update:check', force),
+  getUpdateState: () => ipcRenderer.invoke('update:state'),
+  downloadAndInstallUpdate: () => ipcRenderer.invoke('update:install'),
+  onUpdateProgress: (listener) => {
+    const handler = (_event: IpcRendererEvent, progress: UpdateProgress) => listener(progress)
+    ipcRenderer.on('update:progress', handler)
+    return () => ipcRenderer.removeListener('update:progress', handler)
+  },
+  onUpdateAvailable: (listener) => {
+    const handler = (_event: IpcRendererEvent, result: UpdateCheckResult) => listener(result)
+    ipcRenderer.on('update:available', handler)
+    return () => ipcRenderer.removeListener('update:available', handler)
+  },
   getSetting: (key) => ipcRenderer.invoke('settings:get', key),
   setSetting: (key, value) => ipcRenderer.invoke('settings:set', key, value),
   exportMatchesCsv: (shortId) => ipcRenderer.invoke('export:matchesCsv', shortId),

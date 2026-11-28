@@ -42,6 +42,12 @@ import { ElectronBucklerSource } from './collector/electron-fetcher'
 import { SyncService } from './collector/sync-service'
 import { RealtimeHub } from './server/realtime-hub'
 import { OverlayServer } from './server/overlay-server'
+import {
+  checkForUpdates,
+  downloadAndInstallUpdate,
+  getCachedUpdateResult,
+  onUpdateProgress
+} from './updater'
 
 const OVERLAY_PORT = 8765
 const SYNC_INTERVAL_MS = 20_000
@@ -186,6 +192,23 @@ function createMainWindow(): void {
     if (!quitting) app.quit()
   })
   loadRenderer(mainWindow, 'index.html')
+}
+
+function scheduleStartupUpdateCheck(): void {
+  const window = mainWindow
+  if (!window) return
+  const run = (): void => {
+    setTimeout(() => {
+      void checkForUpdates()
+        .then((result) => {
+          if (!result.available || window.isDestroyed()) return
+          window.webContents.send('update:available', result)
+        })
+        .catch(() => undefined)
+    }, 3000)
+  }
+  if (window.webContents.isLoading()) window.webContents.once('did-finish-load', run)
+  else run()
 }
 
 function chartMode(): ChartMode {
@@ -746,6 +769,20 @@ function registerIpc(): void {
 
   ipcMain.handle('app:version', async () => app.getVersion())
 
+  ipcMain.handle('update:check', async (_event, force?: boolean) =>
+    checkForUpdates(Boolean(force))
+  )
+
+  ipcMain.handle('update:state', async () => getCachedUpdateResult())
+
+  ipcMain.handle('update:install', async () => downloadAndInstallUpdate())
+
+  onUpdateProgress((progress) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send('update:progress', progress)
+    }
+  })
+
   ipcMain.handle('settings:get', async (_event, key: string) => repo.getSetting(key))
 
   ipcMain.handle('settings:set', async (_event, key: string, value: string) => {
@@ -895,6 +932,7 @@ app.whenReady().then(async () => {
 
   registerIpc()
   createMainWindow()
+  scheduleStartupUpdateCheck()
   scheduleAutoBackup()
 
   if (hasSavedSession(sessionPath) && repo.listPlayers().length > 0) {
